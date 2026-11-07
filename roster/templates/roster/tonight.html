@@ -1,0 +1,42 @@
+{% extends "roster/base.html" %}
+{% block title %}On call now{% endblock %}
+{% block content %}
+<h1>On call now <span class="muted">· {{ now|date:"D d/m/Y H:i" }}</span></h1>
+<div class="cards">
+{% for b in boards %}
+  <div class="card">
+    <h3>{{ b.location.short_name }}</h3>
+    {% if b.current %}
+      <p class="muted">After hours now: {{ b.current.kind.label }}, until {{ b.current.end|date:"D H:i" }}</p>
+      {% if b.current.night and b.current.night.members %}
+        {% for m in b.current.night.members %}
+          <div class="big">{{ m.display_name }}{% if m.mobile %} · <a href="tel:{{ m.mobile }}">{{ m.mobile }}</a>{% endif %}</div>
+        {% endfor %}
+      {% else %}<div class="big" style="color:#b3261e">No one rostered</div>{% endif %}
+    {% elif b.unpublished %}
+      <p class="muted">This week's roster hasn't been published yet.</p>
+    {% else %}
+      <p class="muted">Day staff on duty now.</p>
+    {% endif %}
+    {% if b.upcoming %}
+      <p class="muted" style="margin-top:10px">Next after hours: {{ b.upcoming.start|date:"D H:i" }} to {{ b.upcoming.end|date:"D H:i" }}</p>
+      {% if b.upcoming.night and b.upcoming.night.members %}
+        {% for m in b.upcoming.night.members %}<div>{{ m.display_name }}{% if m.mobile %} · <a href="tel:{{ m.mobile }}">{{ m.mobile }}</a>{% endif %}</div>{% endfor %}
+      {% else %}<div style="color:#b3261e">Not rostered yet</div>{% endif %}
+    {% endif %}
+    <h2>Today</h2>
+    <ul class="plain">
+      {% for s in b.shifts %}<li>{{ s.staff.display_name }} · {{ s.start|time:"H:i" }}–{{ s.end|time:"H:i" }}{% if s.shift_type != "ORD" %} · {{ s.get_shift_type_display }}{% endif %}</li>
+      {% empty %}<li class="muted">No published shifts today.</li>{% endfor %}
+    </ul>
+    {% if b.location.has_gentle_way %}
+      <h2>Gentle Way (today and tomorrow)</h2>
+      <ul class="plain">
+        {% for g in b.gentle %}<li>{{ g.date|date:"D d/m" }} {{ g.start|time:"H:i" }} · {{ g.get_process_type_display }} · {% if g.staff %}{{ g.staff.display_name }}{% else %}<strong style="color:#b3261e">Unassigned</strong>{% endif %}</li>
+        {% empty %}<li class="muted">None scheduled.</li>{% endfor %}
+      </ul>
+    {% endif %}
+  </div>
+{% endfor %}
+</div>
+{% endblock %}

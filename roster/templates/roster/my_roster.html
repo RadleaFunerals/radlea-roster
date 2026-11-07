@@ -1,0 +1,48 @@
+{% extends "roster/base.html" %}
+{% block title %}My roster{% endblock %}
+{% block content %}
+<h1>My roster{% if staff %} · {{ staff.display_name }}{% endif %}</h1>
+{% if not staff %}
+  <p class="card">Your login isn't linked to a staff record yet. Ask Robin or Leanne to link it in Setup.</p>
+{% else %}
+<div class="toolbar">
+  <a class="btn" href="{% url 'roster:unavailability_new' %}">I'm not available</a>
+  <a class="btn secondary" href="{% url 'roster:swap_new' %}">Swap / give away a shift</a>
+</div>
+
+<h2>Next 4 weeks</h2>
+<ul class="plain">
+{% for i in items %}
+  <li>
+    <strong>{{ i.date|date:"D d/m" }}</strong> · {{ i.what }} · {{ i.when }} · {{ i.where }}
+    {% if i.detail %}<br><span class="muted">{{ i.detail }}</span>{% endif %}
+    {% if i.draft %} <span class="status draft">Draft</span>{% endif %}
+    {% if i.changed %} <span class="updated">UPDATED</span>{% endif %}
+    <a class="add" href="{% url 'roster:swap_new' %}?item={{ i.ref }}">swap</a>
+  </li>
+{% empty %}
+  <li class="muted">Nothing rostered in published weeks.</li>
+{% endfor %}
+</ul>
+
+<h2>My requests</h2>
+<table class="list">
+  <tr><th>Request</th><th>Status</th><th></th></tr>
+  {% for r in requests %}
+  <tr>
+    <td>{{ r.get_kind_display }}: {{ r.period_label }}{% if r.note %}<br><span class="muted">{{ r.note }}</span>{% endif %}</td>
+    <td>{{ r.get_status_display }}{% if r.decision_note %}<br><span class="muted">{{ r.decision_note }}</span>{% endif %}</td>
+    <td>{% if r.status == "PENDING" %}<form class="inline" method="post" action="{% url 'roster:withdraw' 'unavailability' r.pk %}">{% csrf_token %}<button class="btn small secondary">Withdraw</button></form>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  {% for s in swaps %}
+  <tr>
+    <td>Swap: {{ s.item_label }}{% if s.proposed_staff %} → {{ s.proposed_staff }}{% endif %}</td>
+    <td>{{ s.get_status_display }}{% if s.decision_note %}<br><span class="muted">{{ s.decision_note }}</span>{% endif %}</td>
+    <td>{% if s.status == "PENDING" %}<form class="inline" method="post" action="{% url 'roster:withdraw' 'swap' s.pk %}">{% csrf_token %}<button class="btn small secondary">Withdraw</button></form>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  {% if not requests and not swaps %}<tr><td colspan="3" class="muted">No requests.</td></tr>{% endif %}
+</table>
+{% endif %}
+{% endblock %}

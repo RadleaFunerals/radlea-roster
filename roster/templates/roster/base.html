@@ -1,0 +1,35 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Roster{% endblock %} · Radlea</title>
+  <link rel="stylesheet" href="{% static 'roster/roster.css' %}">
+</head>
+<body>
+<header class="top">
+  <span class="brand">Radlea Roster</span>
+  {% if user.is_authenticated %}
+  <nav>
+    <a href="{% url 'roster:my_roster' %}" {% if request.resolver_match.url_name == 'my_roster' %}class="active"{% endif %}>My roster</a>
+    <a href="{% url 'roster:tonight' %}" {% if request.resolver_match.url_name == 'tonight' %}class="active"{% endif %}>On call now</a>
+    {% for loc in nav_locations %}
+      <a href="{% url 'roster:week_current' loc.code %}" {% if location and location.pk == loc.pk and request.resolver_match.url_name in 'week week_current' %}class="active"{% endif %}>{{ loc.short_name }}</a>
+    {% endfor %}
+    {% if nav_editable %}
+      <a href="{% url 'roster:requests' %}" {% if request.resolver_match.url_name == 'requests' %}class="active"{% endif %}>Requests{% if nav_pending %} <span class="badge">{{ nav_pending }}</span>{% endif %}</a>
+    {% endif %}
+    {% if user.is_superuser %}<a href="{% url 'roster:staff_logins' %}" {% if request.resolver_match.url_name == 'staff_logins' %}class="active"{% endif %}>Logins</a><a href="{% url 'admin:index' %}">Setup</a>{% endif %}
+    <form class="inline" method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Log out</button></form>
+  </nav>
+  {% endif %}
+</header>
+<main>
+  {% if messages %}
+  <ul class="messages">{% for m in messages %}<li class="{{ m.tags }}">{{ m }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="sensitive">Third Party Sensitive</footer>
+</body>
+</html>

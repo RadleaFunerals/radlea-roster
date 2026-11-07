@@ -1,0 +1,30 @@
+{% extends "roster/base.html" %}
+{% block title %}Staff logins{% endblock %}
+{% block content %}
+<h1>Staff logins</h1>
+{% if shown %}
+<div class="card" style="border:2px solid #2a7f8a">
+  <h3>Login for {{ shown.staff.display_name }}</h3>
+  <p class="big">Username: {{ shown.username }}<br>Temporary password: {{ shown.password }}</p>
+  <p class="muted">This password is shown once. Give it to {{ shown.staff.first_name }} in person or by text. They log in at this site's address. To change it later, press "New password" again.</p>
+</div>
+{% endif %}
+<table class="list">
+  <tr><th>Person</th><th>Site</th><th>Login</th><th></th></tr>
+  {% for p in people %}
+  <tr>
+    <td>{{ p.display_name }}{% if not p.email %}<br><span class="muted">No email: won't get roster emails</span>{% endif %}</td>
+    <td>{{ p.home_location }}</td>
+    <td>{% if p.user %}{{ p.user.username }}{% else %}<span class="muted">None</span>{% endif %}</td>
+    <td>
+      <form class="inline" method="post">{% csrf_token %}
+        <input type="hidden" name="staff" value="{{ p.pk }}">
+        {% if p.user %}{% if p.user != user %}<button class="btn small secondary" name="action" value="reset" onclick="return confirm('Give {{ p.first_name }} a new temporary password?');">New password</button>{% endif %}
+        {% else %}<button class="btn small" name="action" value="create">Create login</button>{% endif %}
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+<p class="muted">Add email addresses and mobile numbers in Setup &gt; Staff members.</p>
+{% endblock %}

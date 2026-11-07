@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<title>{{ location.short_name }} roster {{ ws|date:"d/m/Y" }}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm 10mm 16mm; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 10pt; color: #1c2430; margin: 0; }
+  .head { border-bottom: 3px solid #2a7f8a; margin-bottom: 8px; padding-bottom: 4px; }
+  .head .org { color: #1f3864; font-weight: bold; font-size: 9pt; letter-spacing: .5px; }
+  h1 { color: #1f3864; font-size: 15pt; margin: 2px 0; }
+  .meta { font-size: 8.5pt; color: #5b6573; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  th, td { border: 1px solid #b9c2ce; padding: 3px 4px; vertical-align: top; font-size: 8.5pt; }
+  thead th { background: #1f3864; color: #fff; text-align: left; }
+  th.person { background: #f3f5f8; text-align: left; width: 15%; }
+  tr.section th { background: #2a7f8a; color: #fff; text-align: left; }
+  .ph { background: #fbe9d0; }
+  .small { font-size: 7.5pt; color: #5b6573; }
+  .leave { font-style: italic; color: #666; }
+  .footer { position: fixed; bottom: -10mm; left: 0; right: 0; text-align: center; color: #b3261e; font-weight: bold; font-size: 8pt; }
+  .noprint { margin: 8px 0; }
+  @media print { .noprint { display: none; } }
+</style>
+</head>
+<body>
+<div class="noprint"><button onclick="window.print()">Print</button></div>
+<div class="head">
+  <div class="org">RADLEA PTY LTD · {{ location.name|upper }}</div>
+  <h1>Staff roster · week of {{ ws|date:"l d/m/Y" }}</h1>
+  <div class="meta">
+    {% if published %}Published {{ published_at|date:"d/m/Y H:i" }}{% else %}DRAFT - not yet published{% endif %}
+    · Printed {{ printed_at|date:"d/m/Y H:i" }} · Check the app for changes made after printing.
+  </div>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th class="person" style="background:#1f3864;color:#fff">Normal hours</th>
+      {% for d in days %}<th>{{ d.date|date:"D d/m" }}{% if d.holiday %}<br><span style="font-weight:normal">{{ d.holiday.name }}</span>{% endif %}</th>{% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <th class="person">{{ row.staff.display_name }}</th>
+      {% for cell in row.cells %}
+      <td>
+        {% if cell.leave %}<span class="leave">{{ cell.leave.get_kind_display }}</span><br>{% endif %}
+        {% for sh in cell.shifts %}{{ sh.start|time:"H:i" }}–{{ sh.end|time:"H:i" }}{% if sh.shift_type != "ORD" %} <span class="small">{{ sh.get_shift_type_display }}</span>{% endif %}{% if sh.note %}<br><span class="small">{{ sh.note }}</span>{% endif %}<br>{% endfor %}
+      </td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+    <tr class="section"><th colspan="8">After hours (transfer team)</th></tr>
+    <tr>
+      <th class="person">Team</th>
+      {% for o in oncall %}
+      <td>
+        <span class="small">{{ o.kind.label }} {{ o.start|time:"H:i" }}–{{ o.end|time:"H:i" }}</span><br>
+        {% if o.night %}{% for m in o.night.members %}{{ m.display_name }}{% if m.mobile %} <span class="small">{{ m.mobile }}</span>{% endif %}<br>{% endfor %}{% else %}<strong>Not rostered</strong>{% endif %}
+      </td>
+      {% endfor %}
+    </tr>
+    {% if location.has_gentle_way %}
+    <tr class="section"><th colspan="8">Gentle Way attendances</th></tr>
+    <tr>
+      <th class="person">Attendances</th>
+      {% for g in gentle %}
+      <td>{% for a in g.items %}{% if a.status != "CANCELLED" %}{{ a.start|time:"H:i" }} {% if a.process_type == "CHECK" %}System check{% elif a.process_type == "MAIN" %}Process{% else %}Other{% endif %} – {% if a.staff %}{{ a.staff.display_name }}{% else %}Unassigned{% endif %}<br>{% endif %}{% endfor %}</td>
+      {% endfor %}
+    </tr>
+    {% endif %}
+  </tbody>
+</table>
+<div class="footer">Third Party Sensitive</div>
+</body>
+</html>

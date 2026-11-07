@@ -1,0 +1,129 @@
+{% extends "roster/base.html" %}
+{% block title %}{{ location.short_name }} roster{% endblock %}
+{% block content %}
+<h1>{{ location.short_name }} roster · week of {{ ws|date:"D d/m/Y" }}
+  {% if published %}<span class="status published">Published {{ published_at|date:"d/m/Y H:i" }}</span>
+  {% else %}<span class="status draft">Draft</span>{% endif %}
+</h1>
+
+<div class="toolbar">
+  <a class="btn secondary" href="{% url 'roster:week' location.code prev_week.isoformat %}">&larr; Previous week</a>
+  <a class="btn secondary" href="{% url 'roster:week' location.code this_week.isoformat %}">This week</a>
+  <a class="btn secondary" href="{% url 'roster:week' location.code next_week.isoformat %}">Next week &rarr;</a>
+  {% if visible %}<a class="btn secondary" href="{% url 'roster:print_week' location.code ws.isoformat %}" target="_blank">Print</a>{% endif %}
+</div>
+
+{% if not visible %}
+  <p class="card">The {{ location.short_name }} roster for this week hasn't been published yet.</p>
+{% else %}
+
+{% if editor %}
+<div class="toolbar">
+  <a class="btn" href="{% url 'roster:shift_create' location.code %}?date={{ ws.isoformat }}">+ Shift</a>
+  <form class="inline" method="post" action="{% url 'roster:fill_usual' location.code ws.isoformat %}">{% csrf_token %}
+    <button class="btn secondary" type="submit" title="Adds each person's usual shifts where the day is empty. Skips public holidays and leave.">Fill usual shifts</button></form>
+  <form class="inline" method="post" action="{% url 'roster:copy_oncall' location.code ws.isoformat %}">{% csrf_token %}
+    <button class="btn secondary" type="submit" title="Copies last week's after-hours pairs into empty places this week.">Copy last week's after hours</button></form>
+  <form class="inline" method="post" action="{% url 'roster:publish' location.code ws.isoformat %}">{% csrf_token %}
+    <button class="btn" type="submit">{% if published %}Republish{% else %}Publish to staff{% endif %}</button>
+    <label class="muted"><input type="checkbox" name="override" value="1"> Publish anyway if there are errors</label>
+  </form>
+</div>
+{% endif %}
+
+<div class="scroll">
+<table class="grid">
+  <thead>
+    <tr>
+      <th>Normal hours</th>
+      {% for d in days %}
+        <th class="{% if d.holiday and not d.holiday.part_day_from %}holiday{% endif %}" {% if d.holiday %}style="color:#1c2430"{% endif %}>
+          {{ d.date|date:"D d/m" }}
+          {% if d.holiday %}<span class="ph-tag">{{ d.holiday.name }}{% if d.holiday.part_day_from %} (from {{ d.holiday.part_day_from|time:"g a" }}){% endif %}</span>{% endif %}
+        </th>
+      {% endfor %}
+      <th>Paid hrs</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr>
+      <th class="person">{{ row.staff.display_name }}
+        <span class="ph-tag muted">{{ row.staff.get_employment_type_display }}{% if row.staff.home_location_id != location.pk %} · from {{ row.staff.home_location }}{% endif %}</span></th>
+      {% for cell in row.cells %}
+      <td class="{% for d in days %}{% if d.date == cell.date and d.holiday and not d.holiday.part_day_from %}holiday{% endif %}{% endfor %}">
+        {% if cell.leave %}<span class="item leave">{{ cell.leave.get_kind_display }}</span>{% endif %}
+        {% for sh in cell.shifts %}
+          {% if editor %}<a class="item" href="{% url 'roster:shift_edit' sh.pk %}">{% else %}<span class="item">{% endif %}
+            {{ sh.start|time:"H:i" }}–{{ sh.end|time:"H:i" }}
+            {% if sh.shift_type != "ORD" %}<br><small>{{ sh.get_shift_type_display }}</small>{% endif %}
+            {% if sh.note %}<br><small>{{ sh.note }}</small>{% endif %}
+            {% if published and sh.updated_at > published_at %}<br><span class="updated">UPDATED</span>{% endif %}
+          {% if editor %}</a>{% else %}</span>{% endif %}
+        {% endfor %}
+        {% if editor %}<a class="add" href="{% url 'roster:shift_create' location.code %}?date={{ cell.date.isoformat }}&staff={{ row.staff.pk }}">+ add</a>{% endif %}
+      </td>
+      {% endfor %}
+      <td class="hours">{{ row.hours|floatformat:2 }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="9" class="muted">No staff set up for {{ location.short_name }}.</td></tr>
+    {% endfor %}
+
+    <tr class="section"><th colspan="9">After hours (transfer team: two people)</th></tr>
+    <tr>
+      <th class="person">Team</th>
+      {% for o in oncall %}
+      <td>
+        {% if editor %}<a class="item oncall {% if not o.night or o.night.members|length < 2 %}empty{% endif %}" href="{% url 'roster:oncall_edit' location.code o.date.isoformat %}">{% else %}<span class="item oncall {% if not o.night or o.night.members|length < 2 %}empty{% endif %}">{% endif %}
+          <small>{{ o.kind.label }} · {{ o.start|time:"H:i" }}–{{ o.end|time:"H:i" }}</small><br>
+          {% if o.night %}
+            {% for m in o.night.members %}{{ m.display_name }}<br>{% endfor %}
+            {% if o.night.members|length < 2 %}<strong>Needs a second person</strong>{% endif %}
+            {% if o.night.note %}<small>{{ o.night.note }}</small>{% endif %}
+            {% if published and o.night.updated_at > published_at %}<span class="updated">UPDATED</span>{% endif %}
+          {% else %}<strong>Not rostered</strong>{% endif %}
+        {% if editor %}</a>{% else %}</span>{% endif %}
+      </td>
+      {% endfor %}
+      <td></td>
+    </tr>
+
+    {% if location.has_gentle_way %}
+    <tr class="section"><th colspan="9">Gentle Way attendances</th></tr>
+    <tr>
+      <th class="person">Attendances</th>
+      {% for g in gentle %}
+      <td>
+        {% for a in g.items %}
+          {% if editor %}<a class="item gw {% if not a.staff and a.status != 'CANCELLED' %}empty{% endif %}" href="{% url 'roster:gw_edit' a.pk %}">{% else %}<span class="item gw">{% endif %}
+            {{ a.start|time:"H:i" }} {% if a.process_type == "CHECK" %}System check{% elif a.process_type == "MAIN" %}Process{% else %}Other{% endif %}
+            <br>{% if a.staff %}{{ a.staff.display_name }}{% else %}<strong>Unassigned</strong>{% endif %}
+            {% if a.status != "PLANNED" %}<br><small>{{ a.get_status_display }}</small>{% endif %}
+            {% if a.case_reference %}<br><small>{{ a.case_reference }}</small>{% endif %}
+            {% if published and a.updated_at > published_at %}<br><span class="updated">UPDATED</span>{% endif %}
+          {% if editor %}</a>{% else %}</span>{% endif %}
+        {% endfor %}
+        {% if editor %}<a class="add" href="{% url 'roster:gw_create' location.code %}?date={{ g.date.isoformat }}">+ add</a>{% endif %}
+      </td>
+      {% endfor %}
+      <td></td>
+    </tr>
+    {% endif %}
+  </tbody>
+</table>
+</div>
+
+{% if editor %}
+<h2>Roster check</h2>
+{% if issues %}
+<ul class="issues">
+  {% for d, i in issues %}<li class="{{ i.level }}"><strong>{{ d|date:"D d/m" }}:</strong> {{ i.message }}</li>{% endfor %}
+</ul>
+{% else %}
+<p class="muted">No problems found for this week.</p>
+{% endif %}
+{% endif %}
+
+{% endif %}
+{% endblock %}

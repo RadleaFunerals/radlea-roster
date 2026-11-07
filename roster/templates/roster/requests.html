@@ -1,0 +1,55 @@
+{% extends "roster/base.html" %}
+{% block title %}Requests{% endblock %}
+{% block content %}
+<h1>Staff requests</h1>
+
+<h2>Unavailability waiting for a decision</h2>
+<table class="list">
+  <tr><th>Who</th><th>When</th><th>Type</th><th>Decision</th></tr>
+  {% for r in unavailability %}
+  <tr>
+    <td>{{ r.staff }}<br><span class="muted">{{ r.staff.home_location }}</span></td>
+    <td>{{ r.period_label }}{% if r.note %}<br><span class="muted">{{ r.note }}</span>{% endif %}</td>
+    <td>{{ r.get_kind_display }}</td>
+    <td>
+      <form method="post" action="{% url 'roster:decide_unavailability' r.pk %}">{% csrf_token %}
+        <input name="note" placeholder="Note (optional)" maxlength="200">
+        <button class="btn small" name="action" value="approve">Approve</button>
+        <button class="btn small secondary" name="action" value="decline">Decline</button>
+      </form>
+    </td>
+  </tr>
+  {% empty %}<tr><td colspan="4" class="muted">None.</td></tr>{% endfor %}
+</table>
+
+<h2>Swaps waiting for a decision</h2>
+<table class="list">
+  <tr><th>Who</th><th>What</th><th>Proposed</th><th>Decision</th></tr>
+  {% for s in swaps %}
+  <tr>
+    <td>{{ s.requester }}</td>
+    <td>{{ s.item_label }}{% if s.reason %}<br><span class="muted">{{ s.reason }}</span>{% endif %}</td>
+    <td>{{ s.proposed_staff|default:"No one yet" }}</td>
+    <td>
+      <form method="post" action="{% url 'roster:decide_swap' s.pk %}">{% csrf_token %}
+        <select name="replacement">
+          <option value="">{% if s.proposed_staff %}Use {{ s.proposed_staff }}{% else %}Choose who takes it{% endif %}</option>
+          {% for p in decision_form.fields.replacement.queryset %}<option value="{{ p.pk }}">{{ p }}</option>{% endfor %}
+        </select>
+        <input name="note" placeholder="Note (optional)" maxlength="200">
+        <button class="btn small" name="action" value="approve">Approve</button>
+        <button class="btn small secondary" name="action" value="decline">Decline</button>
+      </form>
+    </td>
+  </tr>
+  {% empty %}<tr><td colspan="4" class="muted">None.</td></tr>{% endfor %}
+</table>
+
+<h2>Recently decided</h2>
+<table class="list">
+  <tr><th>Request</th><th>Status</th><th>By</th></tr>
+  {% for r in recent_unavailability %}<tr><td>{{ r }}</td><td>{{ r.get_status_display }}</td><td>{{ r.decided_by|default:"" }}</td></tr>{% endfor %}
+  {% for s in recent_swaps %}<tr><td>{{ s }}{% if s.proposed_staff %} → {{ s.proposed_staff }}{% endif %}</td><td>{{ s.get_status_display }}</td><td>{{ s.decided_by|default:"" }}</td></tr>{% endfor %}
+  {% if not recent_unavailability and not recent_swaps %}<tr><td colspan="3" class="muted">Nothing yet.</td></tr>{% endif %}
+</table>
+{% endblock %}
