@@ -17,9 +17,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Debug is OFF unless DJANGO_DEBUG=1 is set (only ever on your own computer).
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
 TESTING = len(sys.argv) > 1 and sys.argv[1] == "test"
+# The hosting build step gathers the stylesheets (collectstatic) before any
+# secrets are available. That step never serves pages, so it may run without one.
+BUILDING = len(sys.argv) > 1 and sys.argv[1] == "collectstatic"
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
 if not SECRET_KEY:
-    if DEBUG or TESTING:
+    if DEBUG or TESTING or BUILDING:
         SECRET_KEY = "dev-only-insecure-key"
     else:
         raise ImproperlyConfigured("Set DJANGO_SECRET_KEY (or DJANGO_DEBUG=1 on your own computer).")
@@ -39,6 +42,9 @@ CSRF_TRUSTED_ORIGINS = [
 if SITE_URL:
     ALLOWED_HOSTS.append(SITE_URL.split("://", 1)[-1].split("/")[0])
     CSRF_TRUSTED_ORIGINS.append(SITE_URL)
+# DigitalOcean's own app address always works, even if SITE_URL is missing.
+ALLOWED_HOSTS.append(".ondigitalocean.app")
+CSRF_TRUSTED_ORIGINS.append("https://*.ondigitalocean.app")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -54,6 +60,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "config.health.HealthCheckMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

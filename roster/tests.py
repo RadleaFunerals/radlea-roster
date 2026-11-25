@@ -520,3 +520,9 @@ class BootstrapDirectorTests(TestCase):
             robin.user.save()
             call_command("bootstrap_director", stdout=StringIO())  # must not reset it
         self.assertIsNotNone(authenticate(username="robin.drury", password="Changed-Later-99"))
+
+
+class HostingTests(TestCase):
+    def test_health_check_answers_without_a_host_name(self):
+        r = self.client.get("/healthz", HTTP_HOST="10.244.0.7:8080")
+        self.assertEqual((r.status_code, r.content), (200, b"ok"))
