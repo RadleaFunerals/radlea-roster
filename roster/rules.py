@@ -14,6 +14,8 @@ from decimal import Decimal
 
 from django.db.models import Q
 
+from org.models import Skill, StaffSkill
+
 from .models import (
     GentleWayAttendance,
     OnCallNight,
@@ -96,8 +98,22 @@ def _unavailability_issues(staff, start, end):
     return issues
 
 
-def _oncall_nights_for(staff):
-    return OnCallNight.objects.filter(Q(staff_one=staff) | Q(staff_two=staff))
+def _oncall_nights_for(staff, team_only=False):
+    q = Q(staff_one=staff) | Q(staff_two=staff)
+    if not team_only:
+        q |= Q(support_staff=staff) | Q(phone_holder=staff)
+    return OnCallNight.objects.filter(q)
+
+
+def _skill_issues(staff, code, doing):
+    """Error if the person lacks the skill; warning if they're still a trainee."""
+    level = staff.skill_level(code)
+    name = Skill.objects.filter(code=code).values_list("name", flat=True).first() or code
+    if level is None:
+        return [Issue(ERROR, f"{staff} doesn't have the '{name}' skill needed for {doing}. Add it on the Skills page if they've been trained.")]
+    if level == StaffSkill.TRAINEE:
+        return [Issue(WARNING, f"{staff} is a trainee in '{name}'. Make sure a trainer is with them.")]
+    return []
 
 
 # ---------------------------------------------------------------------- shifts
@@ -124,6 +140,10 @@ def check_shift(shift):
             )
 
     issues += _unavailability_issues(staff, s, e)
+
+    area = shift.area
+    if area is not None and area.required_skill_id:
+        issues += _skill_issues(staff, area.required_skill.code, f"a {area.name} shift")
 
     if staff.is_casual and shift.paid_hours < CASUAL_MIN_HOURS:
         issues.append(
@@ -176,40 +196,76 @@ def _consecutive_nights(staff, d, exclude_pk=None):
 def check_oncall(night):
     issues = []
     location = night.location
+    d = fmt_date(night.date)
     if night.staff_one_id and night.staff_one_id == night.staff_two_id:
         issues.append(Issue(ERROR, "The same person is entered twice. The after-hours team is a pair."))
-    members = {m.pk: m for m in night.members}.values()
-    if not members:
-        issues.append(Issue(WARNING, f"No after-hours team for {location} on {fmt_date(night.date)}."))
-    elif len(night.members) < 2 or len(members) < 2:
-        issues.append(Issue(WARNING, f"Only one person on the {location} after-hours team for {fmt_date(night.date)}."))
+    team = list({m.pk: m for m in night.members}.values())
+    if not team:
+        issues.append(Issue(WARNING, f"No after-hours team for {location} on {d}."))
+    elif len(team) < 2:
+        issues.append(Issue(WARNING, f"Only one person on the {location} after-hours team for {d}."))
+    support = night.support_staff
+    if support is not None and support.pk in [m.pk for m in team]:
+        issues.append(Issue(ERROR, f"{support} is already in the pair, so can't also be the third person."))
+    if night.pk is not None or team:
+        if night.phone_holder is None:
+            issues.append(Issue(WARNING, f"No one is down as having the {location} phones on {d}."))
 
     s, e = night.interval()
-    for m in members:
+    trainees = []
+    for m in team:
         issues += _person_checks(m, location)
-        if not m.can_do_transfers:
-            issues.append(Issue(ERROR, f"{m} is not marked as able to do after-hours transfers."))
-
-        others = _exclude_self(
-            _oncall_nights_for(m).filter(
-                date__range=(night.date - timedelta(days=1), night.date + timedelta(days=1))
-            ),
-            night,
-        ).select_related("location")
-        for o in others:
-            os_, oe = o.interval()
-            if overlaps(s, e, os_, oe):
-                issues.append(
-                    Issue(ERROR, f"{m} is already on the {o.location} after-hours team for {fmt_date(o.date)}.")
-                )
-
+        skill = _skill_issues(m, Skill.AH_TRANSFER, "after-hours transfers")
+        if skill and not skill[0].is_error:
+            trainees.append(m)  # trainee warning replaced by the pairing check below
+        else:
+            issues += skill
+        issues += _clash_with_other_nights(night, m, s, e, ERROR)
         issues += _unavailability_issues(m, s, e)
-
         run = _consecutive_nights(m, night.date, exclude_pk=night.pk)
         if run > MAX_CONSECUTIVE_ONCALL_NIGHTS:
-            issues.append(
-                Issue(WARNING, f"{m} would be on after hours {run} nights in a row. Check fatigue.")
-            )
+            issues.append(Issue(WARNING, f"{m} would be on after hours {run} nights in a row. Check fatigue."))
+
+    if trainees:
+        names = " and ".join(t.display_name for t in trainees)
+        experienced_in_pair = any(m.skill_level(Skill.AH_TRANSFER) == StaffSkill.TRAINER for m in team if m not in trainees)
+        if support is None and not experienced_in_pair:
+            if len(trainees) == len(team):
+                issues.append(Issue(WARNING, f"{names} {'are both trainees' if len(trainees) > 1 else 'is a trainee'}: add a trainer as the third person."))
+            else:
+                issues.append(Issue(WARNING, f"{names} is a trainee: pair them with a trainer or add a third person."))
+
+    if support is not None:
+        issues += _person_checks(support, location)
+        level = support.skill_level(Skill.AH_TRANSFER)
+        if level is None:
+            issues.append(Issue(ERROR, f"{support} doesn't have the 'After-hours transfers' skill, so can't be the third person."))
+        elif night.support_role == "TRAINER" and level != StaffSkill.TRAINER:
+            issues.append(Issue(WARNING, f"{support} isn't marked as a trainer for after-hours transfers."))
+        issues += _clash_with_other_nights(night, support, s, e, WARNING)
+        issues += _unavailability_issues(support, s, e)
+
+    holder = night.phone_holder
+    if holder is not None:
+        # The phones can be held by anyone, including for both sites at once.
+        issues += _unavailability_issues(holder, s, e)
+    return issues
+
+
+def _clash_with_other_nights(night, person, s, e, level):
+    """Being in two after-hours teams at once (either site, team or third person)."""
+    issues = []
+    others = _exclude_self(
+        OnCallNight.objects.filter(
+            Q(staff_one=person) | Q(staff_two=person) | Q(support_staff=person),
+            date__range=(night.date - timedelta(days=1), night.date + timedelta(days=1)),
+        ),
+        night,
+    ).select_related("location")
+    for o in others:
+        os_, oe = o.interval()
+        if overlaps(s, e, os_, oe):
+            issues.append(Issue(level, f"{person} is already on the {o.location} after-hours team for {fmt_date(o.date)}."))
     return issues
 
 
@@ -223,8 +279,7 @@ def check_gentle_way(att):
         return [Issue(WARNING, f"Gentle Way attendance on {fmt_date(att.date)} {att.start:%H:%M} has no one assigned.")]
     staff = att.staff
     issues += _person_checks(staff, att.location)
-    if not staff.gentle_way_trained:
-        issues.append(Issue(ERROR, f"{staff} is not marked as Gentle Way trained."))
+    issues += _skill_issues(staff, Skill.GENTLE_WAY, "a Gentle Way attendance")
 
     s, e = att.interval()
     others = _exclude_self(
@@ -244,7 +299,9 @@ def check_gentle_way(att):
 # ---------------------------------------------------------------- whole week
 
 def week_issues(location, ws):
-    """All issues for a location's week, as (date, Issue) pairs, errors first."""
+    """All issues for a location's week, as (date, Issue) pairs, errors first.
+
+    Each issue message is prefixed with the site so a combined view reads clearly."""
     days = week_days(ws)
     found = []
     nights = {n.date: n for n in OnCallNight.objects.filter(location=location, date__range=(days[0], days[-1]))

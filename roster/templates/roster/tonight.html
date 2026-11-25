@@ -9,9 +9,12 @@
     {% if b.current %}
       <p class="muted">After hours now: {{ b.current.kind.label }}, until {{ b.current.end|date:"D H:i" }}</p>
       {% if b.current.night and b.current.night.members %}
-        {% for m in b.current.night.members %}
-          <div class="big">{{ m.display_name }}{% if m.mobile %} · <a href="tel:{{ m.mobile }}">{{ m.mobile }}</a>{% endif %}</div>
-        {% endfor %}
+        {% with n=b.current.night %}
+        <div class="big">&#128222; Phones: {% if n.phone_holder %}{{ n.phone_holder.display_name }}{% if n.phone_holder.mobile %} · <a href="tel:{{ n.phone_holder.mobile }}">{{ n.phone_holder.mobile }}</a>{% endif %}{% else %}<span style="color:#b3261e">not assigned</span>{% endif %}</div>
+        <p class="muted" style="margin:8px 0 2px">Transfer team</p>
+        {% for m in n.members %}<div class="big">{{ m.display_name }}{% if m.mobile %} · <a href="tel:{{ m.mobile }}">{{ m.mobile }}</a>{% endif %}</div>{% endfor %}
+        {% if n.support_staff %}<div>{{ n.get_support_role_display }}: {{ n.support_staff.display_name }}{% if n.support_staff.mobile %} · <a href="tel:{{ n.support_staff.mobile }}">{{ n.support_staff.mobile }}</a>{% endif %}</div>{% endif %}
+        {% endwith %}
       {% else %}<div class="big" style="color:#b3261e">No one rostered</div>{% endif %}
     {% elif b.unpublished %}
       <p class="muted">This week's roster hasn't been published yet.</p>
@@ -22,11 +25,13 @@
       <p class="muted" style="margin-top:10px">Next after hours: {{ b.upcoming.start|date:"D H:i" }} to {{ b.upcoming.end|date:"D H:i" }}</p>
       {% if b.upcoming.night and b.upcoming.night.members %}
         {% for m in b.upcoming.night.members %}<div>{{ m.display_name }}{% if m.mobile %} · <a href="tel:{{ m.mobile }}">{{ m.mobile }}</a>{% endif %}</div>{% endfor %}
+        {% if b.upcoming.night.support_staff %}<div>{{ b.upcoming.night.get_support_role_display }}: {{ b.upcoming.night.support_staff.display_name }}</div>{% endif %}
+        <div>&#128222; Phones: {{ b.upcoming.night.phone_holder.display_name|default:"not assigned" }}</div>
       {% else %}<div style="color:#b3261e">Not rostered yet</div>{% endif %}
     {% endif %}
     <h2>Today</h2>
     <ul class="plain">
-      {% for s in b.shifts %}<li>{{ s.staff.display_name }} · {{ s.start|time:"H:i" }}–{{ s.end|time:"H:i" }}{% if s.shift_type != "ORD" %} · {{ s.get_shift_type_display }}{% endif %}</li>
+      {% for s in b.shifts %}<li>{{ s.staff.display_name }} · {{ s.start|time:"H:i" }}–{{ s.end|time:"H:i" }} · {{ s.area.name }}</li>
       {% empty %}<li class="muted">No published shifts today.</li>{% endfor %}
     </ul>
     {% if b.location.has_gentle_way %}

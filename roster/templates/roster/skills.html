@@ -1,0 +1,34 @@
+{% extends "roster/base.html" %}
+{% block title %}Skills{% endblock %}
+{% block content %}
+<h1>Skills and duties</h1>
+<p class="muted">What each person can be called on for. <span class="lvl TRAINEE">Trainee</span> can be rostered but needs a trainer with them.
+<span class="lvl COMPETENT">Competent</span> works alone. <span class="lvl TRAINER">Trainer</span> can supervise and train others.
+A blank means they can't be rostered for that work.</p>
+<p class="muted">Areas that need a skill:
+{% for a in areas %}{% if a.required_skill %}<span class="lvl" style="background:{{ a.colour }}">{{ a.name }} → {{ a.required_skill }}</span> {% endif %}{% endfor %}
+· After-hours teams need "After-hours transfers" · Gentle Way attendances need "Gentle Way operation".</p>
+
+{% if user.is_superuser and not editing %}<p><a class="btn" href="?edit=1">Edit skills</a></p>{% endif %}
+
+{% if editing %}<form method="post">{% csrf_token %}{% endif %}
+<div class="scroll">
+<table class="skills">
+  <thead>
+    <tr><th>Staff</th>{% for sk in skills %}<th title="{{ sk.description }}">{{ sk.name }}</th>{% endfor %}</tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <th class="person">{{ row.staff.display_name }} <span class="muted">· {{ row.staff.home_location }}</span></th>
+      {% for c in row.cells %}
+        <td>{% if editing %}{{ c.field }}{% elif c.level %}<span class="lvl {{ c.level }}">{% if c.level == "TRAINEE" %}Trainee{% elif c.level == "TRAINER" %}Trainer{% else %}&#10003;{% endif %}</span>{% endif %}</td>
+      {% endfor %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% if editing %}<p style="margin-top:12px"><button class="btn" type="submit">Save skills</button> <a class="btn secondary" href="{% url 'roster:skills' %}">Cancel</a></p></form>{% endif %}
+<p class="muted">Add or rename skills and areas in Setup &gt; Skills / Areas.</p>
+{% endblock %}

@@ -21,7 +21,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
-from org.models import Location, StaffMember
+from org.models import Area, Location, StaffMember
 
 from .timeutils import aware, fmt_date, interval
 
@@ -85,15 +85,6 @@ class RosterWeek(models.Model):
         return self.published_at is not None
 
 
-class ShiftType(models.TextChoices):
-    ORDINARY = "ORD", "Ordinary hours"
-    SERVICE = "SVC", "Service / conducting"
-    TRANSFER = "TRF", "Daytime transfer"
-    MORTUARY = "MORT", "Mortuary / care"
-    TRAINING = "TRN", "Training / meeting"
-    OTHER = "OTH", "Other"
-
-
 class ShiftPattern(models.Model):
     """A person's usual shift on a weekday. Used to fill a week in one click."""
 
@@ -105,7 +96,7 @@ class ShiftPattern(models.Model):
     start = models.TimeField()
     end = models.TimeField()
     unpaid_break_minutes = models.PositiveSmallIntegerField(default=30)
-    shift_type = models.CharField(max_length=4, choices=ShiftType.choices, default=ShiftType.ORDINARY)
+    area = models.ForeignKey(Area, on_delete=models.PROTECT)
 
     class Meta:
         ordering = ["staff__last_name", "weekday", "start"]
@@ -122,7 +113,7 @@ class Shift(models.Model):
     start = models.TimeField()
     end = models.TimeField(help_text="A finish earlier than the start is read as the next morning.")
     unpaid_break_minutes = models.PositiveSmallIntegerField(default=30)
-    shift_type = models.CharField(max_length=4, choices=ShiftType.choices, default=ShiftType.ORDINARY)
+    area = models.ForeignKey(Area, on_delete=models.PROTECT, help_text="The business area this shift is for.")
     note = models.CharField(max_length=200, blank=True)
 
     created_by = models.ForeignKey(
@@ -157,6 +148,9 @@ class OnCallKind(models.TextChoices):
     PUBLIC_HOLIDAY = "PH", "Public holiday"
 
 
+SUPPORT_ROLES = [("TRAINER", "Trainer"), ("SUPERVISOR", "Supervisor"), ("OBSERVER", "Third person")]
+
+
 class OnCallNight(models.Model):
     """The after-hours transfer team for one location on one date.
 
@@ -183,6 +177,29 @@ class OnCallNight(models.Model):
         on_delete=models.PROTECT,
         related_name="+",
         verbose_name="team member 2",
+    )
+    # Optional third person: a trainer or supervisor going out with a new pair
+    # (e.g. two new casuals rostered together).
+    support_staff = models.ForeignKey(
+        StaffMember,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+        verbose_name="third person",
+        help_text="Trainer or supervisor backing up this pair (optional).",
+    )
+    support_role = models.CharField(max_length=10, choices=SUPPORT_ROLES, default="TRAINER")
+    # Who carries this site's after-hours phones. Can be someone outside the
+    # pair (e.g. a director holding both sites' phones).
+    phone_holder = models.ForeignKey(
+        StaffMember,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="+",
+        verbose_name="has the phones",
+        help_text="Who has this site's after-hours phones.",
     )
     note = models.CharField(max_length=200, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -229,8 +246,34 @@ class OnCallNight(models.Model):
     def interval(self):
         return self.interval_for(self.location, self.date)
 
+    ROLE_FIELDS = ("staff_one", "staff_two", "support_staff", "phone_holder")
+
+    @property
+    def everyone(self):
+        """Pair, third person and phone holder, without repeats."""
+        seen, out = set(), []
+        for f in self.ROLE_FIELDS:
+            m = getattr(self, f)
+            if m is not None and m.pk not in seen:
+                seen.add(m.pk)
+                out.append(m)
+        return out
+
+    def roles_of(self, staff):
+        roles = []
+        if staff.pk in (self.staff_one_id, self.staff_two_id):
+            roles.append("team")
+        if self.support_staff_id == staff.pk:
+            roles.append(self.get_support_role_display().lower())
+        if self.phone_holder_id == staff.pk:
+            roles.append("has the phones")
+        return roles
+
     def has_member(self, staff):
         return staff is not None and staff.pk in (self.staff_one_id, self.staff_two_id)
+
+    def involves(self, staff):
+        return staff is not None and staff.pk in {getattr(self, f + "_id") for f in self.ROLE_FIELDS}
 
     def partner_of(self, staff):
         if self.staff_one_id == staff.pk:

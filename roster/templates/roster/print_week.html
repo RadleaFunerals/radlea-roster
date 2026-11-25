@@ -2,76 +2,79 @@
 <html lang="en-AU">
 <head>
 <meta charset="utf-8">
-<title>{{ location.short_name }} roster {{ ws|date:"d/m/Y" }}</title>
+<title>Roster {{ ws|date:"d/m/Y" }}</title>
 <style>
-  @page { size: A4 landscape; margin: 12mm 10mm 16mm; }
-  body { font-family: Arial, Helvetica, sans-serif; font-size: 10pt; color: #1c2430; margin: 0; }
-  .head { border-bottom: 3px solid #2a7f8a; margin-bottom: 8px; padding-bottom: 4px; }
-  .head .org { color: #1f3864; font-weight: bold; font-size: 9pt; letter-spacing: .5px; }
-  h1 { color: #1f3864; font-size: 15pt; margin: 2px 0; }
-  .meta { font-size: 8.5pt; color: #5b6573; }
+  @page { size: A4 landscape; margin: 10mm 8mm 14mm; }
+  body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #1c2430; margin: 0; }
+  .head { border-bottom: 3px solid #2a7f8a; margin-bottom: 6px; padding-bottom: 4px; }
+  .head .org { color: #1f3864; font-weight: bold; font-size: 8.5pt; letter-spacing: .5px; }
+  h1 { color: #1f3864; font-size: 14pt; margin: 2px 0; }
+  .meta { font-size: 8pt; color: #5b6573; }
   table { border-collapse: collapse; width: 100%; table-layout: fixed; }
-  th, td { border: 1px solid #b9c2ce; padding: 3px 4px; vertical-align: top; font-size: 8.5pt; }
+  th, td { border: 1px solid #b9c2ce; padding: 2px 3px; vertical-align: top; font-size: 7.5pt; }
   thead th { background: #1f3864; color: #fff; text-align: left; }
-  th.person { background: #f3f5f8; text-align: left; width: 15%; }
-  tr.section th { background: #2a7f8a; color: #fff; text-align: left; }
-  .ph { background: #fbe9d0; }
-  .small { font-size: 7.5pt; color: #5b6573; }
+  th.person { background: #f3f5f8; text-align: left; width: 13%; }
+  tr.group th, tr.section th { background: #2a7f8a; color: #fff; text-align: left; }
+  .chip { display: block; border-radius: 2px; padding: 1px 2px; margin-bottom: 1px; }
+  .small { font-size: 6.5pt; color: #444; }
+  .at { font-weight: bold; }
   .leave { font-style: italic; color: #666; }
-  .footer { position: fixed; bottom: -10mm; left: 0; right: 0; text-align: center; color: #b3261e; font-weight: bold; font-size: 8pt; }
+  .footer { position: fixed; bottom: -9mm; left: 0; right: 0; text-align: center; color: #b3261e; font-weight: bold; font-size: 8pt; }
   .noprint { margin: 8px 0; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   @media print { .noprint { display: none; } }
 </style>
 </head>
 <body>
 <div class="noprint"><button onclick="window.print()">Print</button></div>
 <div class="head">
-  <div class="org">RADLEA PTY LTD · {{ location.name|upper }}</div>
+  <div class="org">RADLEA PTY LTD · TOWNSVILLE FUNERALS, CREMATIONS &amp; CREMATORIUM · BURDEKIN FUNERALS</div>
   <h1>Staff roster · week of {{ ws|date:"l d/m/Y" }}</h1>
   <div class="meta">
-    {% if published %}Published {{ published_at|date:"d/m/Y H:i" }}{% else %}DRAFT - not yet published{% endif %}
-    · Printed {{ printed_at|date:"d/m/Y H:i" }} · Check the app for changes made after printing.
+    {% for s in sites %}{{ s.location.short_name }}: {% if s.published %}published {{ s.published_at|date:"d/m/Y H:i" }}{% else %}DRAFT{% endif %}{% if not forloop.last %} · {% endif %}{% endfor %}
+    · Printed {{ printed_at|date:"d/m/Y H:i" }} · Check the app for later changes.
   </div>
 </div>
-
 <table>
   <thead>
     <tr>
-      <th class="person" style="background:#1f3864;color:#fff">Normal hours</th>
-      {% for d in days %}<th>{{ d.date|date:"D d/m" }}{% if d.holiday %}<br><span style="font-weight:normal">{{ d.holiday.name }}</span>{% endif %}</th>{% endfor %}
+      <th class="person" style="background:#1f3864;color:#fff">Staff</th>
+      {% for d in days %}<th>{{ d.date|date:"D d/m" }}{% for h in d.holidays %}<br><span style="font-weight:normal">{{ h.name }}</span>{% endfor %}</th>{% endfor %}
     </tr>
   </thead>
   <tbody>
-    {% for row in rows %}
+    {% for g in groups %}
+    <tr class="group"><th colspan="8">{{ g.location.short_name }} staff</th></tr>
+    {% for row in g.rows %}
     <tr>
       <th class="person">{{ row.staff.display_name }}</th>
       {% for cell in row.cells %}
       <td>
-        {% if cell.leave %}<span class="leave">{{ cell.leave.get_kind_display }}</span><br>{% endif %}
-        {% for sh in cell.shifts %}{{ sh.start|time:"H:i" }}–{{ sh.end|time:"H:i" }}{% if sh.shift_type != "ORD" %} <span class="small">{{ sh.get_shift_type_display }}</span>{% endif %}{% if sh.note %}<br><span class="small">{{ sh.note }}</span>{% endif %}<br>{% endfor %}
+        {% if cell.leave %}<span class="leave">{{ cell.leave.get_kind_display }}</span>{% endif %}
+        {% for sh in cell.shifts %}<span class="chip" style="background:{{ sh.area.colour }}">{{ sh.start|time:"H:i" }}–{{ sh.end|time:"H:i" }}{% if sh.location_id != row.staff.home_location_id %} <span class="at">@{{ sh.location.short_name }}</span>{% endif %}<br><span class="small">{{ sh.area.name }}{% if sh.note %} · {{ sh.note }}{% endif %}</span></span>{% endfor %}
       </td>
       {% endfor %}
     </tr>
     {% endfor %}
-    <tr class="section"><th colspan="8">After hours (transfer team)</th></tr>
+    {% endfor %}
+    {% if oncall_rows %}<tr class="section"><th colspan="8">After hours</th></tr>{% endif %}
+    {% for r in oncall_rows %}
     <tr>
-      <th class="person">Team</th>
-      {% for o in oncall %}
-      <td>
-        <span class="small">{{ o.kind.label }} {{ o.start|time:"H:i" }}–{{ o.end|time:"H:i" }}</span><br>
-        {% if o.night %}{% for m in o.night.members %}{{ m.display_name }}{% if m.mobile %} <span class="small">{{ m.mobile }}</span>{% endif %}<br>{% endfor %}{% else %}<strong>Not rostered</strong>{% endif %}
-      </td>
+      <th class="person">{{ r.location.short_name }}</th>
+      {% for c in r.cells %}
+      <td><span class="small">{{ c.kind.label }} {{ c.start|time:"H:i" }}–{{ c.end|time:"H:i" }}</span><br>
+        {% if c.night %}{% for label, m in c.people %}{% if label %}<span class="small">{{ label }}:</span> {% endif %}{{ m.display_name }}{% if m.mobile %} <span class="small">{{ m.mobile }}</span>{% endif %}<br>{% endfor %}
+        <span class="small">Phones: {{ c.night.phone_holder.display_name|default:"not assigned" }}</span>{% else %}<strong>Not rostered</strong>{% endif %}</td>
       {% endfor %}
     </tr>
-    {% if location.has_gentle_way %}
+    {% endfor %}
+    {% for r in gentle_rows %}
     <tr class="section"><th colspan="8">Gentle Way attendances</th></tr>
     <tr>
-      <th class="person">Attendances</th>
-      {% for g in gentle %}
-      <td>{% for a in g.items %}{% if a.status != "CANCELLED" %}{{ a.start|time:"H:i" }} {% if a.process_type == "CHECK" %}System check{% elif a.process_type == "MAIN" %}Process{% else %}Other{% endif %} – {% if a.staff %}{{ a.staff.display_name }}{% else %}Unassigned{% endif %}<br>{% endif %}{% endfor %}</td>
-      {% endfor %}
+      <th class="person">{{ r.location.short_name }}</th>
+      {% for g in r.cells %}<td>{% for a in g.items %}{% if a.status != "CANCELLED" %}{{ a.start|time:"H:i" }} {% if a.process_type == "CHECK" %}Check{% else %}Process{% endif %} – {{ a.staff.display_name|default:"Unassigned" }}<br>{% endif %}{% endfor %}</td>{% endfor %}
     </tr>
-    {% endif %}
+    {% endfor %}
   </tbody>
 </table>
 <div class="footer">Third Party Sensitive</div>

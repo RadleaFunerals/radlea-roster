@@ -3,7 +3,7 @@ import copy
 from django import forms
 from django.db.models import Q
 
-from org.models import StaffMember
+from org.models import Area, Location, Skill, StaffMember
 
 from . import rules
 from .models import GentleWayAttendance, OnCallNight, Shift, UnavailabilityRequest
@@ -18,6 +18,10 @@ def staff_for_location(location):
         .filter(Q(home_location=location) | Q(extra_locations=location))
         .distinct()
     )
+
+
+def with_skill(qs, code):
+    return qs.filter(skills__skill__code=code).distinct()
 
 
 class RuleCheckedForm(forms.ModelForm):
@@ -56,18 +60,26 @@ class RuleCheckedForm(forms.ModelForm):
 
 
 class ShiftForm(RuleCheckedForm):
+    """A shift at either site. The site list only offers sites the user can edit."""
+
     rule_check = staticmethod(rules.check_shift)
 
     class Meta:
         model = Shift
-        fields = ["staff", "date", "start", "end", "unpaid_break_minutes", "shift_type", "note"]
+        fields = ["location", "staff", "area", "date", "start", "end", "unpaid_break_minutes", "note"]
         widgets = {"date": DATE, "start": TIME, "end": TIME}
-        labels = {"end": "Finish", "unpaid_break_minutes": "Unpaid break (minutes)"}
+        labels = {"location": "Site", "area": "Business area", "end": "Finish", "unpaid_break_minutes": "Unpaid break (minutes)"}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, editable=None, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.location is not None:
-            self.fields["staff"].queryset = staff_for_location(self.location)
+        self.fields["location"].queryset = editable if editable is not None else Location.objects.filter(active=True)
+        self.fields["location"].empty_label = None
+        self.fields["staff"].queryset = StaffMember.objects.filter(active=True, on_roster=True).select_related(
+            "home_location"
+        )
+        self.fields["staff"].label_from_instance = lambda s: f"{s.display_name} ({s.home_location})"
+        self.fields["area"].queryset = Area.objects.filter(active=True)
+        self.fields["area"].empty_label = None
 
 
 class OnCallForm(RuleCheckedForm):
@@ -75,13 +87,27 @@ class OnCallForm(RuleCheckedForm):
 
     class Meta:
         model = OnCallNight
-        fields = ["staff_one", "staff_two", "note"]
+        fields = ["staff_one", "staff_two", "support_staff", "support_role", "phone_holder", "note"]
+        labels = {"support_role": "Third person's role"}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        qs = staff_for_location(self.location).filter(can_do_transfers=True)
-        self.fields["staff_one"].queryset = qs
-        self.fields["staff_two"].queryset = qs
+        team = with_skill(staff_for_location(self.location), Skill.AH_TRANSFER)
+        self.fields["staff_one"].queryset = team
+        self.fields["staff_two"].queryset = team
+        self.fields["support_staff"].queryset = with_skill(
+            StaffMember.objects.filter(active=True, on_roster=True), Skill.AH_TRANSFER
+        )
+        self.fields["support_staff"].empty_label = "None"
+        # Anyone can carry the phones, from either site (e.g. a director holding both).
+        self.fields["phone_holder"].queryset = StaffMember.objects.filter(active=True)
+        for f in ("staff_one", "staff_two", "support_staff", "phone_holder"):
+            self.fields[f].label_from_instance = self._label
+
+    def _label(self, s):
+        level = s.skill_level(Skill.AH_TRANSFER)
+        tag = {"TRAINEE": " - trainee", "TRAINER": " - trainer"}.get(level, "")
+        return f"{s.display_name} ({s.home_location}){tag}"
 
     def candidate(self, cd):
         cand = super().candidate(cd)
@@ -100,7 +126,7 @@ class GentleWayForm(RuleCheckedForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["staff"].queryset = staff_for_location(self.location).filter(gentle_way_trained=True)
+        self.fields["staff"].queryset = with_skill(staff_for_location(self.location), Skill.GENTLE_WAY)
         self.fields["staff"].required = False
         self.fields["staff"].empty_label = "Unassigned"
 
@@ -156,3 +182,18 @@ class DecisionForm(forms.Form):
         queryset=StaffMember.objects.filter(active=True, on_roster=True), required=False
     )
     note = forms.CharField(max_length=200, required=False)
+
+
+class SkillsMatrixForm(forms.Form):
+    """One dropdown per person per skill. Field names are s<staff id>_<skill id>."""
+
+    def __init__(self, *args, people=(), skills=(), current=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from org.models import StaffSkill
+
+        choices = [("", "-")] + StaffSkill.LEVEL_CHOICES
+        current = current or {}
+        for p in people:
+            for sk in skills:
+                name = f"s{p.pk}_{sk.pk}"
+                self.fields[name] = forms.ChoiceField(choices=choices, required=False, initial=current.get((p.pk, sk.pk), ""))

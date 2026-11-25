@@ -47,6 +47,54 @@ class Location(models.Model):
         return self.short_name
 
 
+class Skill(models.Model):
+    """Something a person can be called on to do, e.g. daytime transfers, mortuary work."""
+
+    # Codes the roster rules rely on. Names and descriptions can be edited.
+    AH_TRANSFER = "AH_TRANSFER"
+    DAY_TRANSFER = "DAY_TRANSFER"
+    MORTUARY = "MORTUARY"
+    ARRANGING = "ARRANGING"
+    CONDUCTING = "CONDUCTING"
+    CELEBRANT = "CELEBRANT"
+    GENTLE_WAY = "GENTLE_WAY"
+    OFFICE = "OFFICE"
+
+    code = models.CharField(max_length=20, unique=True)
+    name = models.CharField(max_length=60)
+    description = models.CharField(max_length=200, blank=True)
+    sort_order = models.PositiveSmallIntegerField(default=0)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+
+class Area(models.Model):
+    """A business area a shift is worked in: arrangements, transfers, mortuary, etc.
+
+    If an area has a required skill, only people with that skill can be
+    rostered in it (trainees allowed with a warning).
+    """
+
+    code = models.CharField(max_length=20, unique=True)
+    name = models.CharField(max_length=60)
+    colour = models.CharField(max_length=7, default="#e3f1f2", help_text="Background colour on the roster, e.g. #e3f1f2.")
+    required_skill = models.ForeignKey(
+        Skill, null=True, blank=True, on_delete=models.SET_NULL, help_text="Leave blank if anyone can work in this area."
+    )
+    sort_order = models.PositiveSmallIntegerField(default=0)
+    active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["sort_order", "name"]
+
+    def __str__(self):
+        return self.name
+
+
 class StaffMember(models.Model):
     FULL_TIME = "FT"
     PART_TIME = "PT"
@@ -98,11 +146,8 @@ class StaffMember(models.Model):
     on_roster = models.BooleanField(
         default=True, help_text="Untick for people who are never rostered (e.g. a non-operational director)."
     )
-    can_do_transfers = models.BooleanField(
-        default=True, help_text="Can be on the after-hours transfer team."
-    )
-    gentle_way_trained = models.BooleanField(
-        default=False, help_text="Trained and authorised to attend Gentle Way processes and system checks."
+    primary_area = models.ForeignKey(
+        Area, null=True, blank=True, on_delete=models.SET_NULL, help_text="The area they mostly work in."
     )
     editor_locations = models.ManyToManyField(
         Location,
@@ -133,6 +178,19 @@ class StaffMember(models.Model):
     def is_casual(self):
         return self.employment_type == self.CASUAL
 
+    def skill_level(self, code):
+        """TRAINEE / COMPETENT / TRAINER, or None. Uses prefetched skills when available."""
+        if self.pk is None:
+            return None
+        cache = getattr(self, "_skill_cache", None)
+        if cache is None:
+            cache = {s.skill.code: s.level for s in self.skills.select_related("skill")}
+            self._skill_cache = cache
+        return cache.get(code)
+
+    def has_skill(self, code):
+        return self.skill_level(code) is not None
+
     def can_work_at(self, location):
         if location is None:
             return False
@@ -141,3 +199,22 @@ class StaffMember(models.Model):
         if self.pk is None:
             return False
         return self.extra_locations.filter(pk=location.pk).exists()
+
+
+class StaffSkill(models.Model):
+    TRAINEE = "TRAINEE"
+    COMPETENT = "COMPETENT"
+    TRAINER = "TRAINER"
+    LEVEL_CHOICES = [(TRAINEE, "Trainee"), (COMPETENT, "Competent"), (TRAINER, "Trainer / supervisor")]
+
+    staff = models.ForeignKey(StaffMember, on_delete=models.CASCADE, related_name="skills")
+    skill = models.ForeignKey(Skill, on_delete=models.CASCADE, related_name="staff_skills")
+    level = models.CharField(max_length=10, choices=LEVEL_CHOICES, default=COMPETENT)
+    note = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        unique_together = [("staff", "skill")]
+        ordering = ["skill__sort_order"]
+
+    def __str__(self):
+        return f"{self.staff}: {self.skill} ({self.get_level_display()})"

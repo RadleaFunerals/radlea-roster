@@ -24,18 +24,22 @@ def _lines_for(staff, location, ws):
     end = ws + timedelta(days=6)
     lines = []
     for sh in Shift.objects.filter(staff=staff, location=location, date__range=(ws, end)):
-        extra = "" if sh.shift_type == "ORD" else f" ({sh.get_shift_type_display()})"
         note = f" - {sh.note}" if sh.note else ""
-        lines.append((sh.date, sh.start, f"{sh.date:%a} {fmt_date(sh.date)}  {sh.time_label}{extra}{note}"))
-    for n in OnCallNight.objects.filter(Q(staff_one=staff) | Q(staff_two=staff), location=location, date__range=(ws, end)):
+        lines.append((sh.date, sh.start, f"{sh.date:%a} {fmt_date(sh.date)}  {sh.time_label} {sh.area.name}{note}"))
+    q = Q(staff_one=staff) | Q(staff_two=staff) | Q(support_staff=staff) | Q(phone_holder=staff)
+    for n in OnCallNight.objects.filter(q, location=location, date__range=(ws, end)):
         s, e = n.interval()
-        partner = n.partner_of(staff)
-        with_ = f" with {partner.display_name}" if partner else " (partner to be rostered)"
+        roles = [r for r in n.roles_of(staff) if r != "team"]
+        role = f" ({', '.join(roles)})" if roles else ""
+        others = [p.display_name for p in n.members if p.pk != staff.pk]
+        with_ = f" with {' and '.join(others)}" if others else ""
+        if n.support_staff and n.support_staff.pk != staff.pk:
+            with_ += f"; {n.get_support_role_display().lower()}: {n.support_staff.display_name}"
         lines.append(
             (
                 n.date,
                 timezone.localtime(s).time(),
-                f"{n.date:%a} {fmt_date(n.date)}  AFTER HOURS {timezone.localtime(s):%H:%M} to "
+                f"{n.date:%a} {fmt_date(n.date)}  AFTER HOURS{role} {timezone.localtime(s):%H:%M} to "
                 f"{timezone.localtime(e):%H:%M %a}{with_}",
             )
         )
@@ -55,8 +59,10 @@ def email_week(location, ws, republished=False):
 
     end = ws + timedelta(days=6)
     ids = set(Shift.objects.filter(location=location, date__range=(ws, end)).values_list("staff_id", flat=True))
-    for a, b in OnCallNight.objects.filter(location=location, date__range=(ws, end)).values_list("staff_one_id", "staff_two_id"):
-        ids.update(x for x in (a, b) if x)
+    for row in OnCallNight.objects.filter(location=location, date__range=(ws, end)).values_list(
+        "staff_one_id", "staff_two_id", "support_staff_id", "phone_holder_id"
+    ):
+        ids.update(x for x in row if x)
     ids.update(
         GentleWayAttendance.objects.filter(location=location, date__range=(ws, end), staff__isnull=False).values_list(
             "staff_id", flat=True

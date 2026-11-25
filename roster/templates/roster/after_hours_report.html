@@ -1,0 +1,24 @@
+{% extends "roster/base.html" %}
+{% block title %}After-hours load{% endblock %}
+{% block content %}
+<h1>After-hours load · {{ start|date:"d/m/Y" }} to {{ end|date:"d/m/Y" }}</h1>
+<form class="filters" method="get">
+  <label>Period <select name="weeks" onchange="this.form.submit()">
+    <option value="4" {% if weeks == 4 %}selected{% endif %}>Last 4 weeks</option>
+    <option value="8" {% if weeks == 8 %}selected{% endif %}>Last 8 weeks</option>
+    <option value="13" {% if weeks == 13 %}selected{% endif %}>Last 13 weeks</option>
+    <option value="26" {% if weeks == 26 %}selected{% endif %}>Last 26 weeks</option>
+  </select></label>
+</form>
+<p class="muted">Counts every after-hours night or day in the period, including this week, so you can see whether the load is shared fairly. Weekend and public holiday days weigh more on people than weeknights.</p>
+<table class="list">
+  <tr><th>Person</th><th>Weeknights</th><th>Weekend days</th><th>Public holidays</th>{% for l in locations %}<th>In pair at {{ l.short_name }}</th>{% endfor %}<th>As third person</th><th>Had the phones</th><th>Total nights involved</th></tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r.staff.display_name }}</td><td>{{ r.WN }}</td><td>{{ r.WE }}</td><td>{{ r.PH }}</td>
+    {% for n in r.by_loc %}<td>{{ n }}</td>{% endfor %}
+    <td>{{ r.third }}</td><td>{{ r.phones }}</td><td><strong>{{ r.total }}</strong></td>
+  </tr>
+  {% empty %}<tr><td colspan="10" class="muted">No after-hours rostered in this period.</td></tr>{% endfor %}
+</table>
+{% endblock %}

@@ -22,21 +22,21 @@ class PublicHolidayAdmin(admin.ModelAdmin):
 
 @admin.register(ShiftPattern)
 class ShiftPatternAdmin(admin.ModelAdmin):
-    list_display = ("staff", "location", "weekday", "start", "end", "unpaid_break_minutes", "shift_type")
+    list_display = ("staff", "location", "weekday", "start", "end", "unpaid_break_minutes", "area")
     list_filter = ("location", "weekday")
 
 
 @admin.register(Shift)
 class ShiftAdmin(admin.ModelAdmin):
-    list_display = ("date", "staff", "location", "start", "end", "shift_type", "note")
-    list_filter = ("location", "shift_type")
+    list_display = ("date", "staff", "location", "start", "end", "area", "note")
+    list_filter = ("location", "area")
     date_hierarchy = "date"
     search_fields = ("staff__first_name", "staff__last_name", "note")
 
 
 @admin.register(OnCallNight)
 class OnCallNightAdmin(admin.ModelAdmin):
-    list_display = ("date", "location", "staff_one", "staff_two", "note")
+    list_display = ("date", "location", "staff_one", "staff_two", "support_staff", "phone_holder", "note")
     list_filter = ("location",)
     date_hierarchy = "date"
 

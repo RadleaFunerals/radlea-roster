@@ -12,7 +12,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from org.logins import create_login, reset_password
-from org.models import Location, StaffMember
+from org.models import Area, Location, Skill, StaffMember, StaffSkill
 
 from . import rules
 from .forms import (
@@ -20,12 +20,14 @@ from .forms import (
     GentleWayForm,
     OnCallForm,
     ShiftForm,
+    SkillsMatrixForm,
     SwapForm,
     UnavailabilityForm,
 )
 from .models import (
     ChangeLog,
     GentleWayAttendance,
+    OnCallKind,
     OnCallNight,
     PublicHoliday,
     RequestStatus,
@@ -39,6 +41,8 @@ from .notify import email_week
 from .permissions import can_edit, current_staff, editable_locations, require_editor
 from .queues import swaps_for, unavailability_for
 from .timeutils import fmt_date, overlaps, week_days, week_start
+
+NIGHT_RELATED = ("location", "staff_one", "staff_two", "support_staff", "phone_holder")
 
 
 # ------------------------------------------------------------------ helpers
@@ -54,8 +58,13 @@ def _parse_date(value):
         raise Http404("Bad date")
 
 
-def _week_url(location, d):
-    return reverse("roster:week", args=[location.code, week_start(d).isoformat()])
+def _week_url(d, request=None):
+    url = reverse("roster:week", args=[week_start(d).isoformat()])
+    if request is not None:
+        keep = {k: request.GET.get(k) for k in ("loc", "area") if request.GET.get(k)}
+        if keep:
+            url += "?" + "&".join(f"{k}={v}" for k, v in keep.items())
+    return url
 
 
 def _log(request, location, action, summary):
@@ -77,136 +86,211 @@ def _published_set(location_ids, start, end):
     )
 
 
-def _week_context(location, ws, editor):
-    """Everything needed to draw one location's week (screen and print)."""
+def _night_people(n):
+    """For templates: [(label, person)] for the pair, third person and phones."""
+    out = [("", m) for m in n.members]
+    if n.support_staff:
+        out.append((n.get_support_role_display(), n.support_staff))
+    return out
+
+
+# --------------------------------------------------------- combined roster
+
+def _week_context(user, ws, loc_filter=None, area_filter=None):
+    """Both sites on one page. Each site's part is shown if it is published
+    or the user can edit it."""
     days = week_days(ws)
     end = days[-1]
+    all_locations = list(Location.objects.filter(active=True))
+    shown_locations = [l for l in all_locations if not loc_filter or l.code == loc_filter]
+    editable_ids = set(editable_locations(user).values_list("pk", flat=True))
+    weeks = {rw.location_id: rw for rw in RosterWeek.objects.filter(week_start=ws)}
+
+    sites = []
+    for loc in all_locations:
+        rw = weeks.get(loc.pk)
+        sites.append(
+            {
+                "location": loc,
+                "editor": loc.pk in editable_ids,
+                "published": bool(rw and rw.published_at),
+                "published_at": rw.published_at if rw else None,
+            }
+        )
+    visible_ids = {s["location"].pk for s in sites if s["editor"] or s["published"]}
+    shown_ids = {l.pk for l in shown_locations} & visible_ids
+    pub_at = {s["location"].pk: s["published_at"] for s in sites}
+
     shifts = list(
-        Shift.objects.filter(location=location, date__range=(ws, end)).select_related("staff")
+        Shift.objects.filter(location_id__in=shown_ids, date__range=(ws, end)).select_related(
+            "staff", "location", "area"
+        )
     )
-    base_staff = list(
-        StaffMember.objects.filter(active=True, on_roster=True)
-        .filter(Q(home_location=location) | Q(extra_locations=location))
-        .distinct()
-    )
-    by_id = {s.pk: s for s in base_staff}
+    if area_filter:
+        shifts = [sh for sh in shifts if sh.area.code == area_filter]
     for sh in shifts:
-        by_id.setdefault(sh.staff_id, sh.staff)
-    staff = sorted(
-        by_id.values(),
-        key=lambda s: (s.home_location_id != location.pk, s.is_casual, s.last_name, s.first_name),
-    )
+        pa = pub_at.get(sh.location_id)
+        sh.changed = bool(pa and sh.updated_at > pa)
+        sh.editable = sh.location_id in editable_ids
+
+    # People: everyone who can work at a shown site, plus anyone with a shift shown.
+    people = {
+        s.pk: s
+        for s in StaffMember.objects.filter(active=True, on_roster=True)
+        .filter(Q(home_location_id__in=shown_ids) | Q(extra_locations__in=shown_ids))
+        .select_related("home_location", "primary_area")
+        .distinct()
+    }
+    for sh in shifts:
+        people.setdefault(sh.staff_id, sh.staff)
+    if area_filter:
+        with_shift = {sh.staff_id for sh in shifts}
+        people = {k: v for k, v in people.items() if k in with_shift or (v.primary_area and v.primary_area.code == area_filter)}
 
     leave = {}
     for u in UnavailabilityRequest.objects.filter(
-        staff__in=staff, status=RequestStatus.APPROVED, start_date__lte=end, end_date__gte=ws
+        staff_id__in=people.keys(), status=RequestStatus.APPROVED, start_date__lte=end, end_date__gte=ws
     ):
         for d in days:
             if u.start_date <= d <= u.end_date:
                 leave[(u.staff_id, d)] = u
 
-    rows = []
-    for s in staff:
-        cells = []
-        total = 0
-        for d in days:
-            day_shifts = [sh for sh in shifts if sh.staff_id == s.pk and sh.date == d]
-            total += sum(sh.paid_hours for sh in day_shifts)
-            cells.append({"date": d, "shifts": day_shifts, "leave": leave.get((s.pk, d))})
-        rows.append({"staff": s, "cells": cells, "hours": total})
+    nights = list(
+        OnCallNight.objects.filter(location_id__in=shown_ids, date__range=(ws, end)).select_related(*NIGHT_RELATED)
+    )
+    ah_count = {}
+    for n in nights:
+        for p in n.everyone:
+            ah_count[p.pk] = ah_count.get(p.pk, 0) + 1
 
-    nights = {
-        n.date: n
-        for n in OnCallNight.objects.filter(location=location, date__range=(ws, end)).select_related(
-            "staff_one", "staff_two"
+    groups = []
+    for loc in all_locations:
+        members = sorted(
+            [p for p in people.values() if p.home_location_id == loc.pk],
+            key=lambda s: (s.is_casual, s.employment_type == StaffMember.DIRECTOR, s.last_name, s.first_name),
         )
-    }
-    oncall = []
-    for d in days:
-        n = nights.get(d)
-        s, e = OnCallNight.interval_for(location, d)
-        oncall.append(
+        if not members:
+            continue
+        rows = []
+        for s in members:
+            cells, total = [], 0
+            for d in days:
+                day_shifts = [sh for sh in shifts if sh.staff_id == s.pk and sh.date == d]
+                total += sum(sh.paid_hours for sh in day_shifts)
+                cells.append({"date": d, "shifts": day_shifts, "leave": leave.get((s.pk, d))})
+            rows.append({"staff": s, "cells": cells, "hours": total, "ah": ah_count.get(s.pk, 0)})
+        groups.append({"location": loc, "rows": rows})
+
+    oncall_rows = []
+    for loc in shown_locations:
+        if loc.pk not in shown_ids:
+            continue
+        by_date = {n.date: n for n in nights if n.location_id == loc.pk}
+        cells = []
+        for d in days:
+            n = by_date.get(d)
+            s, e = OnCallNight.interval_for(loc, d)
+            cells.append(
+                {
+                    "date": d,
+                    "night": n,
+                    "people": _night_people(n) if n else [],
+                    "kind": OnCallNight.kind_for(loc, d),
+                    "start": timezone.localtime(s),
+                    "end": timezone.localtime(e),
+                    "changed": bool(n and pub_at.get(loc.pk) and n.updated_at > pub_at[loc.pk]),
+                }
+            )
+        oncall_rows.append({"location": loc, "editor": loc.pk in editable_ids, "cells": cells})
+
+    gentle_rows = []
+    for loc in shown_locations:
+        if not loc.has_gentle_way or loc.pk not in shown_ids:
+            continue
+        atts = list(
+            GentleWayAttendance.objects.filter(location=loc, date__range=(ws, end)).select_related("staff")
+        )
+        gentle_rows.append(
             {
-                "date": d,
-                "night": n,
-                "kind": OnCallNight.kind_for(location, d),
-                "start": timezone.localtime(s),
-                "end": timezone.localtime(e),
+                "location": loc,
+                "editor": loc.pk in editable_ids,
+                "cells": [{"date": d, "items": [a for a in atts if a.date == d]} for d in days],
             }
         )
 
-    gentle = []
-    if location.has_gentle_way:
-        atts = list(
-            GentleWayAttendance.objects.filter(location=location, date__range=(ws, end)).select_related("staff")
-        )
-        gentle = [{"date": d, "items": [a for a in atts if a.date == d]} for d in days]
-
     holidays = {}
-    for h in PublicHoliday.objects.filter(date__range=(ws, end)).filter(
-        Q(location__isnull=True) | Q(location=location)
-    ):
-        holidays[h.date] = h
-    day_info = [{"date": d, "holiday": holidays.get(d)} for d in days]
+    for h in PublicHoliday.objects.filter(date__range=(ws, end)).select_related("location"):
+        holidays.setdefault(h.date, []).append(h)
+    day_info = [
+        {
+            "date": d,
+            "holidays": holidays.get(d, []),
+            "full_ph": any(h.part_day_from is None and h.location_id is None for h in holidays.get(d, [])),
+            "weekend": d.weekday() >= 5,
+        }
+        for d in days
+    ]
 
-    roster_week = RosterWeek.objects.filter(location=location, week_start=ws).first()
+    issues = []
+    for loc in all_locations:
+        if loc.pk in editable_ids and loc.pk in {l.pk for l in shown_locations}:
+            for d, i in rules.week_issues(loc, ws):
+                issues.append((d, rules.Issue(i.level, f"{loc.short_name}: {i.message}", i.key)))
+    issues.sort(key=lambda x: (0 if x[1].is_error else 1, x[0]))
+
+    hidden = [s["location"] for s in sites if s["location"].pk not in visible_ids]
     return {
-        "location": location,
         "ws": ws,
         "days": day_info,
-        "rows": rows,
-        "oncall": oncall,
-        "gentle": gentle,
-        "roster_week": roster_week,
-        "published": bool(roster_week and roster_week.published_at),
-        "published_at": roster_week.published_at if roster_week else None,
-        "issues": rules.week_issues(location, ws) if editor else [],
+        "groups": groups,
+        "oncall_rows": oncall_rows,
+        "gentle_rows": gentle_rows,
+        "sites": sites,
+        "hidden_sites": hidden,
+        "issues": issues,
+        "areas": Area.objects.filter(active=True),
+        "locations": all_locations,
+        "loc_filter": loc_filter or "",
+        "area_filter": area_filter or "",
+        "any_editor": bool(editable_ids),
+        "ncols": 9,
     }
 
 
-# --------------------------------------------------------------- top pages
-
 @login_required
 def home(request):
-    editable = editable_locations(request.user)
-    if editable.exists():
-        return redirect("roster:week_current", code=editable.first().code)
+    if editable_locations(request.user).exists():
+        return redirect("roster:week_current")
     return redirect("roster:my_roster")
 
 
 @login_required
-def week_view(request, code, start=None):
-    location = _location(code)
+def week_view(request, start=None):
     ws = week_start(_parse_date(start)) if start else week_start(timezone.localdate())
-    editor = can_edit(request.user, location)
-    ctx = _week_context(location, ws, editor)
+    ctx = _week_context(request.user, ws, request.GET.get("loc"), request.GET.get("area"))
+    qs = request.GET.urlencode()
     ctx.update(
         {
-            "editor": editor,
-            "visible": editor or ctx["published"],
             "prev_week": ws - timedelta(days=7),
             "next_week": ws + timedelta(days=7),
             "this_week": week_start(timezone.localdate()),
+            "qs": f"?{qs}" if qs else "",
         }
     )
     return render(request, "roster/week.html", ctx)
 
 
 @login_required
-def print_week(request, code, start):
-    location = _location(code)
+def print_week(request, start):
     ws = week_start(_parse_date(start))
-    editor = can_edit(request.user, location)
-    ctx = _week_context(location, ws, editor=False)
-    if not (editor or ctx["published"]):
-        raise Http404("This roster hasn't been published.")
+    ctx = _week_context(request.user, ws, request.GET.get("loc"), request.GET.get("area"))
     ctx["printed_at"] = timezone.localtime()
     return render(request, "roster/print_week.html", ctx)
 
 
 @login_required
 def tonight(request):
-    """Who is on after hours right now (or next), per location, plus today's shifts."""
+    """Who is on after hours right now (or next), per site, plus today's shifts."""
     now = timezone.now()
     today = timezone.localdate()
     editable_ids = set(editable_locations(request.user).values_list("pk", flat=True))
@@ -222,7 +306,7 @@ def tonight(request):
             if not visible(d):
                 continue
             s, e = OnCallNight.interval_for(loc, d)
-            night = OnCallNight.objects.filter(location=loc, date=d).select_related("staff_one", "staff_two").first()
+            night = OnCallNight.objects.filter(location=loc, date=d).select_related(*NIGHT_RELATED).first()
             entry = {
                 "date": d,
                 "night": night,
@@ -235,15 +319,13 @@ def tonight(request):
             elif s > now and upcoming is None:
                 upcoming = entry
         shifts = (
-            Shift.objects.filter(location=loc, date=today).select_related("staff") if visible(today) else []
+            Shift.objects.filter(date=today, location=loc).select_related("staff", "area") if visible(today) else []
         )
         gw = []
         if loc.has_gentle_way:
             gw = [
                 g
-                for g in GentleWayAttendance.objects.filter(
-                    location=loc, date__range=(today, today + timedelta(days=1))
-                )
+                for g in GentleWayAttendance.objects.filter(location=loc, date__range=(today, today + timedelta(days=1)))
                 .exclude(status=GentleWayAttendance.CANCELLED)
                 .select_related("staff")
                 if visible(g.date)
@@ -279,14 +361,16 @@ def _my_items(staff, user, start, end):
         return {"draft": pub is None, "changed": bool(pub and updated and updated > pub)}
 
     items = []
-    for sh in Shift.objects.filter(staff=staff, date__range=(start, end)).select_related("location"):
+    for sh in Shift.objects.filter(staff=staff, date__range=(start, end)).select_related("location", "area"):
         if visible(sh.location_id, sh.date):
+            s, e = sh.interval()
             items.append(
                 {
-                    "sort": sh.interval()[0],
-                    "ends": sh.interval()[1],
+                    "sort": s,
+                    "ends": e,
                     "date": sh.date,
-                    "what": sh.get_shift_type_display(),
+                    "what": sh.area.name,
+                    "colour": sh.area.colour,
                     "when": sh.time_label,
                     "where": sh.location,
                     "detail": sh.note,
@@ -295,38 +379,50 @@ def _my_items(staff, user, start, end):
                     **flags(sh.location_id, sh.date, sh.updated_at),
                 }
             )
-    for n in OnCallNight.objects.filter(Q(staff_one=staff) | Q(staff_two=staff), date__range=(start, end)).select_related(
-        "location", "staff_one", "staff_two"
-    ):
-        if visible(n.location_id, n.date):
-            s, e = n.interval()
-            partner = n.partner_of(staff)
-            items.append(
-                {
-                    "sort": s,
-                    "ends": e,
-                    "date": n.date,
-                    "what": f"After hours ({n.get_kind_display().lower()})",
-                    "when": f"{timezone.localtime(s):%H:%M} to {timezone.localtime(e):%H:%M %a}",
-                    "where": n.location,
-                    "detail": f"With {partner.display_name}" + (f" ({partner.mobile})" if partner.mobile else "")
-                    if partner
-                    else "Partner not yet rostered",
-                    "ref": f"oncall:{n.pk}",
-                    "label": f"After hours {fmt_date(n.date)} ({n.location})",
-                    **flags(n.location_id, n.date, n.updated_at),
-                }
-            )
+    q = Q(staff_one=staff) | Q(staff_two=staff) | Q(support_staff=staff) | Q(phone_holder=staff)
+    for n in OnCallNight.objects.filter(q, date__range=(start, end)).select_related(*NIGHT_RELATED):
+        if not visible(n.location_id, n.date):
+            continue
+        s, e = n.interval()
+        roles = n.roles_of(staff)
+        others = [p for p in n.members if p.pk != staff.pk]
+        bits = []
+        if others:
+            bits.append("With " + " and ".join(p.display_name + (f" ({p.mobile})" if p.mobile else "") for p in others))
+        if n.support_staff and n.support_staff.pk != staff.pk:
+            bits.append(f"{n.get_support_role_display()}: {n.support_staff.display_name}")
+        if n.phone_holder and n.phone_holder.pk != staff.pk:
+            bits.append(f"Phones: {n.phone_holder.display_name}")
+        what = "After hours"
+        if roles and roles != ["team"]:
+            what += " - " + ", ".join(r for r in roles if r != "team")
+        items.append(
+            {
+                "sort": s,
+                "ends": e,
+                "date": n.date,
+                "what": f"{what} ({n.get_kind_display().lower()})",
+                "colour": "#e6e9f4",
+                "when": f"{timezone.localtime(s):%H:%M} to {timezone.localtime(e):%H:%M %a}",
+                "where": n.location,
+                "detail": " · ".join(bits),
+                "ref": f"oncall:{n.pk}",
+                "label": f"After hours {fmt_date(n.date)} ({n.location})",
+                **flags(n.location_id, n.date, n.updated_at),
+            }
+        )
     for g in GentleWayAttendance.objects.filter(staff=staff, date__range=(start, end)).exclude(
         status=GentleWayAttendance.CANCELLED
     ).select_related("location"):
         if visible(g.location_id, g.date):
+            s, e = g.interval()
             items.append(
                 {
-                    "sort": g.interval()[0],
-                    "ends": g.interval()[1],
+                    "sort": s,
+                    "ends": e,
                     "date": g.date,
                     "what": f"Gentle Way: {g.get_process_type_display()}",
+                    "colour": "#efe6f4",
                     "when": f"{g.start:%H:%M} (about {g.expected_minutes} min)",
                     "where": g.location,
                     "detail": g.case_reference,
@@ -345,7 +441,7 @@ def _my_items(staff, user, start, end):
 def my_roster(request):
     staff = current_staff(request.user)
     today = timezone.localdate()
-    ctx = {"staff": staff, "items": [], "requests": [], "swaps": []}
+    ctx = {"staff": staff, "items": [], "requests": [], "swaps": [], "skills": []}
     if staff is not None:
         # Start from yesterday so an after-hours shift still running this morning shows.
         ctx["items"] = _my_items(staff, request.user, today - timedelta(days=1), today + timedelta(days=27))
@@ -353,55 +449,160 @@ def my_roster(request):
         ctx["swaps"] = staff.swap_requests.select_related(
             "shift__location", "oncall__location", "gentle_way__location", "proposed_staff"
         )[:10]
+        ctx["skills"] = staff.skills.select_related("skill")
     return render(request, "roster/my_roster.html", ctx)
+
+
+# ------------------------------------------------------------ skills
+
+@login_required
+def skills(request):
+    """Who can be called on for what. Everyone can see it; directors edit it."""
+    people = list(
+        StaffMember.objects.filter(active=True, on_roster=True)
+        .select_related("home_location", "primary_area")
+        .order_by("home_location__sort_order", "employment_type", "last_name")
+    )
+    all_skills = list(Skill.objects.all())
+    current = {(ss.staff_id, ss.skill_id): ss.level for ss in StaffSkill.objects.all()}
+    editing = request.user.is_superuser and (request.GET.get("edit") == "1" or request.method == "POST")
+    if request.method == "POST":
+        if not request.user.is_superuser:
+            raise PermissionDenied("Directors only.")
+        form = SkillsMatrixForm(request.POST, people=people, skills=all_skills, current=current)
+        if form.is_valid():
+            changes = []
+            for p in people:
+                for sk in all_skills:
+                    new = form.cleaned_data.get(f"s{p.pk}_{sk.pk}") or ""
+                    old = current.get((p.pk, sk.pk), "")
+                    if new == old:
+                        continue
+                    if new:
+                        StaffSkill.objects.update_or_create(staff=p, skill=sk, defaults={"level": new})
+                    else:
+                        StaffSkill.objects.filter(staff=p, skill=sk).delete()
+                    changes.append(f"{p.display_name} - {sk.name}: {old or 'none'} -> {new or 'none'}")
+            if changes:
+                _log(request, None, "skills changed", "; ".join(changes))
+            messages.success(request, f"Skills saved ({len(changes)} change(s)).")
+            return redirect("roster:skills")
+    form = SkillsMatrixForm(people=people, skills=all_skills, current=current) if editing else None
+    rows = []
+    for p in people:
+        cells = []
+        for sk in all_skills:
+            cells.append(
+                {
+                    "level": current.get((p.pk, sk.pk), ""),
+                    "field": form[f"s{p.pk}_{sk.pk}"] if form else None,
+                }
+            )
+        rows.append({"staff": p, "cells": cells})
+    return render(
+        request,
+        "roster/skills.html",
+        {"rows": rows, "skills": all_skills, "editing": editing, "form": form, "areas": Area.objects.filter(active=True)},
+    )
+
+
+# ------------------------------------------------------------ reports
+
+@login_required
+def after_hours_report(request):
+    """How the after-hours load is spread across people (fairness check)."""
+    if not editable_locations(request.user).exists():
+        raise PermissionDenied("Roster editors only.")
+    try:
+        weeks = max(1, min(int(request.GET.get("weeks", 8)), 52))
+    except ValueError:
+        weeks = 8
+    end = week_start(timezone.localdate()) + timedelta(days=6)
+    start = end - timedelta(days=7 * weeks - 1)
+    stats = {}
+
+    def row(p):
+        return stats.setdefault(
+            p.pk, {"staff": p, "WN": 0, "WE": 0, "PH": 0, "third": 0, "phones": 0, "total": 0}
+        )
+
+    for n in OnCallNight.objects.filter(date__range=(start, end)).select_related(*NIGHT_RELATED):
+        kind = n.kind
+        for m in {m.pk: m for m in n.members}.values():
+            r = row(m)
+            r[kind] += 1
+            r[n.location.code] = r.get(n.location.code, 0) + 1
+            r["total"] += 1
+        if n.support_staff:
+            row(n.support_staff)["third"] += 1
+        if n.phone_holder:
+            row(n.phone_holder)["phones"] += 1
+        # Total = nights the person was involved at all (in any role), counted once.
+        team_ids = {m.pk for m in n.members}
+        for p in n.everyone:
+            if p.pk not in team_ids:
+                row(p)["total"] += 1
+    locations = list(Location.objects.filter(active=True))
+    rows = sorted(stats.values(), key=lambda r: (-r["total"], r["staff"].last_name))
+    for r in rows:
+        r["by_loc"] = [r.get(l.code, 0) for l in locations]
+    return render(
+        request,
+        "roster/after_hours_report.html",
+        {"rows": rows, "weeks": weeks, "start": start, "end": end, "locations": locations},
+    )
 
 
 # -------------------------------------------------------- editing: shifts
 
 @login_required
-def shift_create(request, code):
-    location = _location(code)
-    require_editor(request.user, location)
+def shift_create(request):
+    editable = editable_locations(request.user)
+    if not editable.exists():
+        raise PermissionDenied("You can't edit the roster.")
     initial = {"unpaid_break_minutes": 30}
     if request.GET.get("date"):
         initial["date"] = _parse_date(request.GET["date"])
+    staff = None
     if request.GET.get("staff"):
-        initial["staff"] = request.GET["staff"]
-    form = ShiftForm(request.POST or None, location=location, initial=initial)
+        staff = StaffMember.objects.filter(pk=request.GET["staff"]).select_related("home_location", "primary_area").first()
+        if staff:
+            initial["staff"] = staff.pk
+            if staff.primary_area_id:
+                initial["area"] = staff.primary_area_id
+    loc = Location.objects.filter(code=(request.GET.get("loc") or "").upper()).first() or (
+        staff.home_location if staff else None
+    )
+    if loc and editable.filter(pk=loc.pk).exists():
+        initial["location"] = loc.pk
+    form = ShiftForm(request.POST or None, initial=initial, editable=editable)
     if request.method == "POST" and form.is_valid():
         shift = form.save(commit=False)
-        shift.location = location
         shift.created_by = request.user
         shift.save()
-        _log(request, location, "shift added", str(shift))
+        _log(request, shift.location, "shift added", str(shift))
         _show_warnings(request, form)
         messages.success(request, f"Shift added: {shift}.")
-        return redirect(_week_url(location, shift.date))
-    return render(request, "roster/form.html", {"form": form, "title": f"Add shift - {location}", "location": location})
+        return redirect(_week_url(shift.date))
+    return render(request, "roster/form.html", {"form": form, "title": "Add shift"})
 
 
 @login_required
 def shift_edit(request, pk):
     shift = get_object_or_404(Shift.objects.select_related("location", "staff"), pk=pk)
-    location = shift.location
-    require_editor(request.user, location)
+    require_editor(request.user, shift.location)
     before = str(shift)
-    form = ShiftForm(request.POST or None, instance=shift, location=location)
+    form = ShiftForm(request.POST or None, instance=shift, editable=editable_locations(request.user))
     if request.method == "POST" and form.is_valid():
         shift = form.save()
-        _log(request, location, "shift changed", f"{before} -> {shift}")
+        _log(request, shift.location, "shift changed", f"{before} -> {shift}")
         _show_warnings(request, form)
         messages.success(request, "Shift updated.")
-        return redirect(_week_url(location, shift.date))
+        return redirect(_week_url(shift.date))
     return render(
         request,
         "roster/form.html",
-        {
-            "form": form,
-            "title": f"Edit shift - {location}",
-            "location": location,
-            "delete_url": reverse("roster:shift_delete", args=[shift.pk]),
-        },
+        {"form": form, "title": "Edit shift", "delete_url": reverse("roster:shift_delete", args=[shift.pk])},
     )
 
 
@@ -414,7 +615,7 @@ def shift_delete(request, pk):
     shift.delete()
     _log(request, location, "shift removed", label)
     messages.success(request, f"Removed: {label}.")
-    return redirect(_week_url(location, d))
+    return redirect(_week_url(d))
 
 
 # ---------------------------------------------------- editing: after hours
@@ -430,33 +631,36 @@ def oncall_edit(request, code, day):
     s, e = OnCallNight.interval_for(location, d)
     if request.method == "POST" and form.is_valid():
         night = form.save(commit=False)
-        if not night.staff_one and not night.staff_two:
+        if not any(getattr(night, f) for f in OnCallNight.ROLE_FIELDS):
             if night.pk:
                 night.delete()
                 _log(request, location, "after hours cleared", before)
             messages.info(request, f"After-hours team for {fmt_date(d)} cleared.")
-            return redirect(_week_url(location, d))
+            return redirect(_week_url(d))
         night.save()
         _log(request, location, "after hours set", f"{before} -> {night}" if before else str(night))
         _show_warnings(request, form)
         messages.success(request, f"After-hours team saved: {night}.")
-        return redirect(_week_url(location, d))
+        return redirect(_week_url(d))
     title = (
         f"After hours - {location} - {d:%a} {fmt_date(d)} "
         f"({OnCallNight.kind_for(location, d).label}, {timezone.localtime(s):%H:%M} to "
         f"{timezone.localtime(e):%H:%M %a})"
     )
-    return render(request, "roster/form.html", {"form": form, "title": title, "location": location})
+    return render(request, "roster/form.html", {"form": form, "title": title})
 
 
 @login_required
 @require_POST
-def copy_oncall(request, code, start):
-    """Copy last week's after-hours pairs into any empty places this week."""
+def copy_oncall(request, start, code):
+    """Copy last week's after-hours teams (pair, third person, phones) into empty places."""
     location = _location(code)
     require_editor(request.user, location)
     ws = week_start(_parse_date(start))
-    prev = {n.date: n for n in OnCallNight.objects.filter(location=location, date__range=(ws - timedelta(days=7), ws - timedelta(days=1)))}
+    prev = {
+        n.date: n
+        for n in OnCallNight.objects.filter(location=location, date__range=(ws - timedelta(days=7), ws - timedelta(days=1)))
+    }
     copied, skipped = 0, []
     for d in week_days(ws):
         src = prev.get(d - timedelta(days=7))
@@ -464,11 +668,15 @@ def copy_oncall(request, code, start):
             continue
         night = OnCallNight.objects.filter(location=location, date=d).first() or OnCallNight(location=location, date=d)
         changed = False
-        for field in ("staff_one", "staff_two"):
+        for field in OnCallNight.ROLE_FIELDS:
             if getattr(night, field) is None and getattr(src, field) is not None:
-                if not night.has_member(getattr(src, field)):
-                    setattr(night, field, getattr(src, field))
-                    changed = True
+                person = getattr(src, field)
+                if field in ("staff_one", "staff_two") and night.has_member(person):
+                    continue
+                setattr(night, field, person)
+                changed = True
+        if night.support_staff_id == src.support_staff_id:
+            night.support_role = src.support_role
         if not changed:
             continue
         errs = rules.errors(rules.check_oncall(night))
@@ -478,10 +686,10 @@ def copy_oncall(request, code, start):
         night.save()
         copied += 1
     _log(request, location, "after hours copied", f"Week of {fmt_date(ws)}: {copied} nights copied")
-    messages.success(request, f"Copied last week's after-hours team into {copied} night(s).")
+    messages.success(request, f"{location}: copied last week's after-hours team into {copied} night(s).")
     for s in skipped:
         messages.warning(request, f"Not copied - {s}")
-    return redirect(_week_url(location, ws))
+    return redirect(_week_url(ws))
 
 
 # ------------------------------------------------- editing: Gentle Way
@@ -501,10 +709,8 @@ def gw_create(request, code):
         _log(request, location, "Gentle Way added", str(att))
         _show_warnings(request, form)
         messages.success(request, f"Gentle Way attendance added: {att}.")
-        return redirect(_week_url(location, att.date))
-    return render(
-        request, "roster/form.html", {"form": form, "title": f"Add Gentle Way attendance - {location}", "location": location}
-    )
+        return redirect(_week_url(att.date))
+    return render(request, "roster/form.html", {"form": form, "title": f"Add Gentle Way attendance - {location}"})
 
 
 @login_required
@@ -519,14 +725,13 @@ def gw_edit(request, pk):
         _log(request, location, "Gentle Way changed", f"{before} -> {att}")
         _show_warnings(request, form)
         messages.success(request, "Gentle Way attendance updated.")
-        return redirect(_week_url(location, att.date))
+        return redirect(_week_url(att.date))
     return render(
         request,
         "roster/form.html",
         {
             "form": form,
             "title": f"Edit Gentle Way attendance - {location}",
-            "location": location,
             "delete_url": reverse("roster:gw_delete", args=[att.pk]),
         },
     )
@@ -541,21 +746,21 @@ def gw_delete(request, pk):
     att.delete()
     _log(request, location, "Gentle Way removed", label)
     messages.success(request, f"Removed: {label}.")
-    return redirect(_week_url(location, d))
+    return redirect(_week_url(d))
 
 
 # ---------------------------------------------------- week-level actions
 
 @login_required
 @require_POST
-def fill_usual(request, code, start):
-    """Fill the week from each person's usual shifts, skipping anything that breaks a rule."""
+def fill_usual(request, start, code):
+    """Fill one site's week from each person's usual shifts, skipping anything that breaks a rule."""
     location = _location(code)
     require_editor(request.user, location)
     ws = week_start(_parse_date(start))
     created, skipped = 0, []
     patterns = ShiftPattern.objects.filter(location=location, staff__active=True, staff__on_roster=True).select_related(
-        "staff"
+        "staff", "area"
     )
     for p in patterns:
         d = ws + timedelta(days=p.weekday)
@@ -571,7 +776,7 @@ def fill_usual(request, code, start):
             start=p.start,
             end=p.end,
             unpaid_break_minutes=p.unpaid_break_minutes,
-            shift_type=p.shift_type,
+            area=p.area,
             created_by=request.user,
         )
         errs = rules.errors(rules.check_shift(shift))
@@ -581,15 +786,15 @@ def fill_usual(request, code, start):
         shift.save()
         created += 1
     _log(request, location, "week filled", f"Week of {fmt_date(ws)}: {created} usual shifts added")
-    messages.success(request, f"Added {created} usual shift(s).")
+    messages.success(request, f"{location}: added {created} usual shift(s).")
     for s in skipped:
         messages.warning(request, f"Skipped - {s}")
-    return redirect(_week_url(location, ws))
+    return redirect(_week_url(ws))
 
 
 @login_required
 @require_POST
-def publish_week(request, code, start):
+def publish_week(request, start, code):
     location = _location(code)
     require_editor(request.user, location)
     ws = week_start(_parse_date(start))
@@ -597,9 +802,9 @@ def publish_week(request, code, start):
     if errs and request.POST.get("override") != "1":
         messages.error(
             request,
-            f"This week has {len(errs)} roster error(s). Fix them, or tick 'Publish anyway' to publish regardless.",
+            f"{location} has {len(errs)} roster error(s) this week. Fix them, or tick 'Publish anyway'.",
         )
-        return redirect(_week_url(location, ws))
+        return redirect(_week_url(ws))
     rw, _ = RosterWeek.objects.get_or_create(location=location, week_start=ws)
     first = rw.published_at is None
     rw.published_at = timezone.now()
@@ -614,7 +819,7 @@ def publish_week(request, code, start):
         messages.warning(request, "No email address in Staff for: " + ", ".join(missing) + ". They weren't emailed.")
     if failed:
         messages.warning(request, "Email failed for: " + ", ".join(failed) + ". Check the mail settings.")
-    return redirect(_week_url(location, ws))
+    return redirect(_week_url(ws))
 
 
 # ------------------------------------------------------------ staff logins
@@ -674,10 +879,7 @@ def swap_new(request):
     today = timezone.localdate()
     items = _my_items(staff, request.user, today - timedelta(days=1), today + timedelta(days=60))
     choices = [(i["ref"], i["label"]) for i in items]
-    if request.GET.get("item"):
-        initial = {"item": request.GET["item"]}
-    else:
-        initial = {}
+    initial = {"item": request.GET["item"]} if request.GET.get("item") else {}
     form = SwapForm(request.POST or None, choices=choices, staff=staff, initial=initial)
     if request.method == "POST" and form.is_valid():
         kind, pk = form.cleaned_data["item"].split(":")
@@ -690,7 +892,10 @@ def swap_new(request):
             req.shift = get_object_or_404(Shift, pk=pk, staff=staff)
         elif kind == "oncall":
             req.oncall = get_object_or_404(
-                OnCallNight.objects.filter(Q(staff_one=staff) | Q(staff_two=staff)), pk=pk
+                OnCallNight.objects.filter(
+                    Q(staff_one=staff) | Q(staff_two=staff) | Q(support_staff=staff) | Q(phone_holder=staff)
+                ),
+                pk=pk,
             )
         elif kind == "gw":
             req.gentle_way = get_object_or_404(GentleWayAttendance, pk=pk, staff=staff)
@@ -704,7 +909,11 @@ def swap_new(request):
     return render(
         request,
         "roster/form.html",
-        {"form": form, "title": "Swap or give away a shift", "empty_note": None if choices else "You have nothing rostered in the next 60 days."},
+        {
+            "form": form,
+            "title": "Swap or give away a shift",
+            "empty_note": None if choices else "You have nothing rostered in the next 60 days.",
+        },
     )
 
 
@@ -774,10 +983,8 @@ def decide_unavailability(request, pk):
         for sh in Shift.objects.filter(staff=req.staff, date__range=(req.start_date - timedelta(days=1), req.end_date)):
             if overlaps(s, e, *sh.interval()):
                 clashes.append(str(sh))
-        for n in OnCallNight.objects.filter(
-            Q(staff_one=req.staff) | Q(staff_two=req.staff),
-            date__range=(req.start_date - timedelta(days=1), req.end_date),
-        ):
+        q = Q(staff_one=req.staff) | Q(staff_two=req.staff) | Q(support_staff=req.staff) | Q(phone_holder=req.staff)
+        for n in OnCallNight.objects.filter(q, date__range=(req.start_date - timedelta(days=1), req.end_date)):
             if overlaps(s, e, *n.interval()):
                 clashes.append(f"after hours {fmt_date(n.date)} ({n.location})")
         for g in GentleWayAttendance.objects.filter(staff=req.staff, date__range=(req.start_date, req.end_date)):
@@ -825,13 +1032,13 @@ def decide_swap(request, pk):
             item.staff = replacement
             issues = rules.check_shift(item)
         elif req.oncall:
-            if item.staff_one_id == req.requester_id:
-                item.staff_one = replacement
-            elif item.staff_two_id == req.requester_id:
-                item.staff_two = replacement
-            else:
+            # Hand over every role the requester had that night (pair, third person, phones).
+            fields = [f for f in OnCallNight.ROLE_FIELDS if getattr(item, f + "_id") == req.requester_id]
+            if not fields:
                 messages.error(request, "The requester is no longer on that after-hours team.")
                 return redirect("roster:requests")
+            for f in fields:
+                setattr(item, f, replacement)
             issues = rules.check_oncall(item)
         else:
             item.staff = replacement

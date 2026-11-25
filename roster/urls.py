@@ -8,15 +8,18 @@ urlpatterns = [
     path("", views.home, name="home"),
     path("me/", views.my_roster, name="my_roster"),
     path("tonight/", views.tonight, name="tonight"),
-    # Week roster per location
-    path("week/<str:code>/", views.week_view, name="week_current"),
-    path("week/<str:code>/<str:start>/", views.week_view, name="week"),
-    path("week/<str:code>/<str:start>/fill-usual/", views.fill_usual, name="fill_usual"),
-    path("week/<str:code>/<str:start>/copy-after-hours/", views.copy_oncall, name="copy_oncall"),
-    path("week/<str:code>/<str:start>/publish/", views.publish_week, name="publish"),
-    path("week/<str:code>/<str:start>/print/", views.print_week, name="print_week"),
+    path("skills/", views.skills, name="skills"),
+    path("reports/after-hours/", views.after_hours_report, name="after_hours_report"),
+    # Combined roster for all sites (filter with ?loc=TVL / ?area=TRANSFERS)
+    path("week/", views.week_view, name="week_current"),
+    path("week/<str:start>/", views.week_view, name="week"),
+    path("week/<str:start>/print/", views.print_week, name="print_week"),
+    # Per-site week actions (each site is built and published by its own editor)
+    path("week/<str:start>/<str:code>/fill-usual/", views.fill_usual, name="fill_usual"),
+    path("week/<str:start>/<str:code>/copy-after-hours/", views.copy_oncall, name="copy_oncall"),
+    path("week/<str:start>/<str:code>/publish/", views.publish_week, name="publish"),
     # Normal hours
-    path("shift/new/<str:code>/", views.shift_create, name="shift_create"),
+    path("shift/new/", views.shift_create, name="shift_create"),
     path("shift/<int:pk>/", views.shift_edit, name="shift_edit"),
     path("shift/<int:pk>/delete/", views.shift_delete, name="shift_delete"),
     # After hours

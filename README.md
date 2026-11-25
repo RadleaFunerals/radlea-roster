@@ -1,4 +1,4 @@
-# Radlea Roster (v0.2)
+# Radlea Roster (v0.3)
 
 Staff roster for Townsville Funerals, Cremations & Crematorium and Burdekin Funerals (Ayr). It covers:
 
@@ -68,7 +68,7 @@ python manage.py runserver
 
 Open http://127.0.0.1:8000 and log in with a username and temporary password printed by `seed_radlea`.
 
-Tests: `python manage.py test` (42 tests).
+Tests: `python manage.py test` (56 tests).
 
 ### What is loaded automatically
 
@@ -77,17 +77,20 @@ Tests: `python manage.py test` (42 tests).
 | 13 staff + Robin and Leanne, with role, Award grade, employment type and home site | Staff Pay Master Register v0.2 (02/11/2026) and payrun 02/11/2026 |
 | Usual Mon–Fri shifts for full-time staff (30 min unpaid break, 7.6 paid hours a day) | Register "Usual shift" column |
 | Chloe and Graham able to work at both sites | Register |
-| Gentle Way trained: Shane and Robin | Robin, 08/11/2026 |
+| Business areas with colours: Operations, Arrangements, Funeral services, Transfers, Mortuary & care, Office & admin, Gentle Way, Training / meeting | Draft for Robin to refine (Setup > Areas) |
+| Skills with Trainee / Competent / Trainer levels. Starting skills come from job titles and who did standby in the 02/11/2026 payrun. Gentle Way: Shane and Robin. Chloe and James are after-hours trainees. Alan does daytime transfers, not mortuary | **[ASSUMPTION: check every row on the Skills page]** |
 | Natalie edits the Townsville roster, Amie edits Ayr; Robin and Leanne edit both | [ASSUMPTION: confirm] |
 | After hours: weeknights 17:00–08:00, weekend and public holiday days 08:00–08:00 | Confirmed by Robin, 08/11/2026 |
 | Queensland public holidays, 24/12/2026 to 28/12/2027 | qld.gov.au, checked 08/11/2026 |
 
 ## 3. Building a week (Natalie, Amie, directors)
 
-1. Open **Townsville** or **Ayr** and go to the week.
+Both sites are on one **Roster** page, grouped as Townsville staff and Ayr staff. A shift at the other site carries an "@ Ayr" / "@ Townsville" tag. Shift colours show the business area. Filter by site or area at the top. Each site still has its own Fill, Copy and Publish buttons: Natalie edits Townsville and Amie edits Ayr, and directors edit both. The **Hrs** column is paid hours and **AH** is after-hours nights that week.
+
+1. Open **Roster** and go to the week.
 2. **Fill usual shifts** adds everyone's normal Mon–Fri shifts. It skips public holidays, approved leave and days that already have a shift.
 3. Add services, casual shifts and changes with **+ add** in any cell. Click a shift to change or remove it.
-4. Click each day in the **After hours** row to set the pair. **Copy last week's after hours** fills empty nights from the week before.
+4. Click each day in a site's **After hours** row to set the pair, an optional **third person** (trainer, supervisor or third person), and **who has the phones**. The phone holder can be anyone, including one person holding both sites' phones. **Copy last week's after hours** fills empty nights from the week before.
 5. Add **Gentle Way attendances** in their row (Townsville only).
 6. Read **Roster check** below the grid. Red items are errors and amber items are warnings.
 7. **Publish to staff**. Staff can't see a week until it is published. Everyone rostered that week who has an email address is emailed their own shifts, after-hours nights (with their partner's name) and Gentle Way attendances. Republishing after changes sends an "UPDATED" email. Anything changed after publishing is also marked UPDATED on staff screens.
@@ -101,12 +104,17 @@ Errors stop the change being saved:
 - Overlapping shifts, including shifts that run past midnight.
 - Rostering someone during approved unavailability.
 - The same person entered twice in an after-hours pair, or put on both sites' teams on the same night.
-- Anyone not marked "can do transfers" on the after-hours team.
-- Anyone not marked Gentle Way trained on a Gentle Way attendance.
+- A shift in a business area that needs a skill the person doesn't have (e.g. Alan on a Mortuary & care shift).
+- Anyone without the "After-hours transfers" skill in an after-hours pair or as the third person.
+- The third person also being in the pair.
+- Anyone without the "Gentle Way operation" skill on a Gentle Way attendance.
 
 Warnings are shown but allowed:
 
-- An after-hours night with one person or no one.
+- An after-hours night with one person or no one, or with no one holding the phones.
+- A trainee in a pair with no trainer in the pair and no third person.
+- A third person rostered as "Trainer" who isn't marked Trainer for after-hours transfers.
+- A trainee rostered in an area that needs a skill (make sure a trainer is with them).
 - A casual shift under 4 paid hours (the timesheet tops it up to 4).
 - Full-time paid hours above 38 in the week (check overtime).
 - More than 7 after-hours nights in a row [ASSUMPTION: confirm limit].
@@ -116,10 +124,18 @@ Publishing is blocked while there are errors, unless "Publish anyway" is ticked.
 
 Every change is written to a change log (Setup > Change logs) that can't be edited.
 
+### Skills page
+
+Everyone can see who is skilled for what. Directors press **Edit skills** to set each person's level for each skill: Trainee, Competent or Trainer. Add or rename skills and areas, and choose which area needs which skill, in Setup.
+
+### After-hours load
+
+**After-hours load** (editors only) counts weeknights, weekend days, public holidays, third-person nights and phone nights per person over 4 to 26 weeks, to check the load is shared fairly.
+
 ## 4. Staff (phone)
 
-- **My roster**: your next 4 weeks, including who you're paired with after hours.
-- **On call now**: who is on after hours at each site right now and next, with tap-to-call.
+- **My roster**: your next 4 weeks in area colours, who you're paired with after hours, the trainer and who has the phones, plus your own skills.
+- **On call now**: who has the phones at each site right now, the transfer team and any trainer, with tap-to-call.
 - **I'm not available**: send leave or unavailability to your manager. Paid leave is still applied for in Xero as now. This only stops you being rostered.
 - **Swap**: ask to hand a shift, after-hours night or Gentle Way attendance to someone else. You can name who has agreed.
 

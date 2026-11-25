@@ -11,13 +11,13 @@
   <span class="brand">Radlea Roster</span>
   {% if user.is_authenticated %}
   <nav>
+    <a href="{% url 'roster:week_current' %}" {% if request.resolver_match.url_name in 'week week_current' %}class="active"{% endif %}>Roster</a>
     <a href="{% url 'roster:my_roster' %}" {% if request.resolver_match.url_name == 'my_roster' %}class="active"{% endif %}>My roster</a>
     <a href="{% url 'roster:tonight' %}" {% if request.resolver_match.url_name == 'tonight' %}class="active"{% endif %}>On call now</a>
-    {% for loc in nav_locations %}
-      <a href="{% url 'roster:week_current' loc.code %}" {% if location and location.pk == loc.pk and request.resolver_match.url_name in 'week week_current' %}class="active"{% endif %}>{{ loc.short_name }}</a>
-    {% endfor %}
+    <a href="{% url 'roster:skills' %}" {% if request.resolver_match.url_name == 'skills' %}class="active"{% endif %}>Skills</a>
     {% if nav_editable %}
       <a href="{% url 'roster:requests' %}" {% if request.resolver_match.url_name == 'requests' %}class="active"{% endif %}>Requests{% if nav_pending %} <span class="badge">{{ nav_pending }}</span>{% endif %}</a>
+      <a href="{% url 'roster:after_hours_report' %}" {% if request.resolver_match.url_name == 'after_hours_report' %}class="active"{% endif %}>After-hours load</a>
     {% endif %}
     {% if user.is_superuser %}<a href="{% url 'roster:staff_logins' %}" {% if request.resolver_match.url_name == 'staff_logins' %}class="active"{% endif %}>Logins</a><a href="{% url 'admin:index' %}">Setup</a>{% endif %}
     <form class="inline" method="post" action="{% url 'logout' %}">{% csrf_token %}<button type="submit">Log out</button></form>

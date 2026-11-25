@@ -76,3 +76,27 @@ footer.sensitive { text-align: center; color: var(--red); font-weight: bold; fon
   main { padding: 10px; }
   h1 { font-size: 19px; }
 }
+
+/* v0.3: combined roster, areas, skills */
+.filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.filters select { padding: 6px; font: inherit; border: 1px solid var(--line); border-radius: 4px; }
+.sitebar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.site { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.site strong { color: var(--navy); margin-right: 4px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; font-size: 12px; }
+.legend span { padding: 2px 8px; border-radius: 10px; border: 1px solid rgba(0,0,0,.08); }
+table.grid tr.group th { background: var(--navy); color: #fff; text-align: left; font-size: 14px; }
+.weekend { background: #f8f9fb; }
+.at { display: inline-block; font-size: 11px; font-weight: bold; background: var(--navy); color: #fff; border-radius: 3px; padding: 0 4px; margin-left: 3px; }
+.role { font-size: 11px; color: #5b6573; }
+.phones { display: block; font-size: 11px; margin-top: 2px; }
+.ah-count { text-align: center; white-space: nowrap; background: var(--grey); }
+table.skills { border-collapse: collapse; min-width: 900px; }
+table.skills th, table.skills td { border: 1px solid var(--line); padding: 4px 6px; font-size: 13px; text-align: center; }
+table.skills th.person { text-align: left; background: var(--grey); white-space: nowrap; }
+table.skills thead th { background: var(--navy); color: #fff; font-weight: normal; font-size: 12px; }
+table.skills select { font: inherit; font-size: 12px; padding: 2px; }
+.lvl { display: inline-block; padding: 1px 6px; border-radius: 8px; font-size: 12px; }
+.lvl.TRAINEE { background: var(--amber-bg); color: var(--amber); }
+.lvl.COMPETENT { background: var(--teal-light); color: var(--teal); }
+.lvl.TRAINER { background: var(--navy); color: #fff; }

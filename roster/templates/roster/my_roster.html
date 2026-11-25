@@ -13,7 +13,7 @@
 <h2>Next 4 weeks</h2>
 <ul class="plain">
 {% for i in items %}
-  <li>
+  <li style="border-left:5px solid {{ i.colour }};padding-left:8px">
     <strong>{{ i.date|date:"D d/m" }}</strong> · {{ i.what }} · {{ i.when }} · {{ i.where }}
     {% if i.detail %}<br><span class="muted">{{ i.detail }}</span>{% endif %}
     {% if i.draft %} <span class="status draft">Draft</span>{% endif %}
@@ -24,6 +24,9 @@
   <li class="muted">Nothing rostered in published weeks.</li>
 {% endfor %}
 </ul>
+
+<h2>My skills</h2>
+<p>{% for s in skills %}<span class="lvl {{ s.level }}">{{ s.skill.name }}{% if s.level == "TRAINEE" %} (trainee){% elif s.level == "TRAINER" %} (trainer){% endif %}</span> {% empty %}<span class="muted">None recorded yet.</span>{% endfor %}</p>
 
 <h2>My requests</h2>
 <table class="list">
