@@ -93,6 +93,17 @@ WSGI_APPLICATION = "config.wsgi.application"
 
 # SQLite on a laptop; PostgreSQL on DigitalOcean via DATABASE_URL
 # e.g. postgres://user:pass@host:25060/radlea?sslmode=require
+_db_url = os.environ.get("DATABASE_URL", "").strip()
+if _db_url and ("://" not in _db_url or _db_url.startswith("://") or "${" in _db_url):
+    # Usually ${db.DATABASE_URL} pointing at a database name that doesn't exist.
+    raise ImproperlyConfigured(
+        "DATABASE_URL isn't a real database address (it starts '" + _db_url[:12] + "'). "
+        "In DigitalOcean, check the database component's name and set DATABASE_URL to "
+        "${<that name>.DATABASE_URL}, or remove the app-level DATABASE_URL so the attached "
+        "database's own one is used."
+    )
+if not _db_url and not (DEBUG or TESTING or BUILDING):
+    raise ImproperlyConfigured("DATABASE_URL is not set, so the live app has no database to use.")
 DATABASES = {
     "default": dj_database_url.config(
         default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}", conn_max_age=600
